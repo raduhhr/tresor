@@ -1,0 +1,151 @@
+###############################
+# File: ./tasks/main.yml
+###############################
+---
+- name: Install nginx + certbot
+  become: true
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+    state: present
+    update_cache: true
+
+- name: Ensure webroot exists for ACME challenges
+  become: true
+  ansible.builtin.file:
+    path: /var/www/html
+    state: directory
+    mode: "0755"
+
+- name: Enable nginx service
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: true
+
+- name: Open UFW ports for nginx (80/443)
+  become: true
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    to_port: "{{ item }}"
+  loop: "{{ nginx_music_open_ports }}"
+  when: nginx_music_manage_ufw | bool
+
+- name: Check if cert already exists
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ nginx_music_domain }}/fullchain.pem"
+  register: _music_cert
+
+# ---- Step 1: Render HTTP bootstrap config if no cert
+- name: Render HTTP bootstrap nginx config (no cert yet)
+  become: true
+  ansible.builtin.template:
+    src: music.http.nginx.j2
+    dest: /etc/nginx/sites-available/music.conf
+    mode: "0644"
+  when:
+    - nginx_music_enable_tls | bool
+    - not _music_cert.stat.exists
+  notify: reload nginx
+
+# ---- Step 1b: Enable site + disable default (safe on both paths)
+- name: Enable music site
+  become: true
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/music.conf
+    dest: /etc/nginx/sites-enabled/music.conf
+    state: link
+  notify: reload nginx
+
+- name: Disable default site (if present)
+  become: true
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Nginx config test (bootstrap or TLS)
+  become: true
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+
+# Flush any queued reload handlers now (before certbot needs nginx to serve ACME).
+# Only reloads if a config actually changed above — unlike an unconditional systemctl call.
+- name: Flush handlers (apply bootstrap config before certbot)
+  ansible.builtin.meta: flush_handlers
+
+# ---- Step 2: Issue cert (only if missing)
+
+- name: Compute ACME email (safe)
+  ansible.builtin.set_fact:
+    nginx_music_acme_email_effective: >-
+      {{
+        (nginx_music_acme_email | default('')) 
+        if (nginx_music_acme_email | default('') | length > 0)
+        else (vault_acme_email | default(''))
+      }}
+
+- name: Assert ACME email is set
+  ansible.builtin.assert:
+    that:
+      - nginx_music_acme_email_effective | length > 0
+    fail_msg: "Set nginx_music_acme_email or vault_acme_email."
+
+- name: Obtain cert with certbot nginx plugin
+  become: true
+  ansible.builtin.command: >
+    certbot --nginx
+    -d {{ nginx_music_domain }}
+    --agree-tos
+    --email {{ nginx_music_acme_email_effective }}
+    --non-interactive
+    --redirect
+  when:
+    - nginx_music_enable_tls | bool
+    - not _music_cert.stat.exists
+
+- name: Set _music_cert_after to existing cert state (if already present)
+  ansible.builtin.set_fact:
+    _music_cert_after: "{{ _music_cert }}"
+  when: _music_cert.stat.exists | bool
+
+
+# Re-check cert after issuance
+- name: Re-check cert exists after certbot
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ nginx_music_domain }}/fullchain.pem"
+  register: _music_cert_after
+
+# ---- Step 3: Render TLS config if cert exists
+- name: Render TLS nginx config (cert present)
+  become: true
+  ansible.builtin.template:
+    src: music.tls.nginx.j2
+    dest: /etc/nginx/sites-available/music.conf
+    mode: "0644"
+  when:
+    - nginx_music_enable_tls | bool
+    - _music_cert_after.stat.exists | bool
+  notify: reload nginx
+
+- name: Nginx config test (TLS)
+  become: true
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  when:
+    - nginx_music_enable_tls | bool
+    - _music_cert_after.stat.exists | bool
+
+# Flush handlers to apply TLS config (only reloads if config template changed above).
+- name: Flush handlers (apply TLS config)
+  ansible.builtin.meta: flush_handlers
+  when:
+    - nginx_music_enable_tls | bool
+    - _music_cert_after.stat.exists | bool

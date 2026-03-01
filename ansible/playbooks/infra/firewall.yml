@@ -1,0 +1,17 @@
+---
+# playbooks/infra/firewall.yml
+#
+# Usage:
+#   ansible-playbook playbooks/infra/firewall.yml
+#
+#   # Cleanup only (first run after migration):
+#   ansible-playbook playbooks/infra/firewall.yml --tags firewall:cleanup
+#
+#   # Just rebuild DOCKER-USER rules:
+#   ansible-playbook playbooks/infra/firewall.yml --tags firewall:docker
+
+- name: Tresor firewall
+  hosts: tresor
+  become: true
+  roles:
+    - docker-firewall

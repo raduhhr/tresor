@@ -1,0 +1,10 @@
+---
+- name: Remove jellyfin container
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove jellyfin container
+      community.docker.docker_container:
+        name: jellyfin
+        state: absent
+        force_kill: true

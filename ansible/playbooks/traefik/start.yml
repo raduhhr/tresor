@@ -1,0 +1,21 @@
+---
+- name: Start Traefik
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: traefik
+
+  tasks:
+    - name: Ensure Traefik container is started
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: started
+      register: _start
+
+    - name: Show status after start
+      ansible.builtin.debug:
+        msg: "Traefik started successfully"
+      when: _start.changed
+

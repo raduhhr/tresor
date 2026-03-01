@@ -1,0 +1,33 @@
+---
+- name: Gather Grafana container info
+  community.docker.docker_container_info:
+    name: "{{ grafana_container_name }}"
+  register: _grafana_info
+  changed_when: false
+
+- name: Assert Grafana container is running
+  ansible.builtin.assert:
+    that:
+      - _grafana_info.exists
+      - _grafana_info.container.State.Running
+      - _grafana_info.container.State.ExitCode == 0
+    fail_msg: "Grafana container is not healthy"
+
+- name: Check Grafana API health endpoint (via docker exec)
+  ansible.builtin.command: >
+    docker exec {{ grafana_container_name }} 
+    wget -q -O- http://localhost:{{ grafana_port }}/api/health
+  register: _api_health
+  changed_when: false
+
+- name: Parse health response
+  ansible.builtin.set_fact:
+    _health_json: "{{ _api_health.stdout | from_json }}"
+
+- name: Display Grafana health status
+  ansible.builtin.debug:
+    msg:
+      - "✅ Grafana is healthy!"
+      - "Database: {{ _health_json.database }}"
+      - "Version: {{ _health_json.version }}"
+      - "Access: http://{{ grafana_bind_addr }}:{{ grafana_host_port }}"

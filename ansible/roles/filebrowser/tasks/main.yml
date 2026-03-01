@@ -1,0 +1,247 @@
+---
+# tasks file for roles/filebrowser (rootless as UID 1000, LAN-only)
+
+# =========================================
+# 1) Ensure directories (owned by UID/GID)
+# =========================================
+- name: Ensure Filebrowser config dir exists
+  ansible.builtin.file:
+    path: "{{ filebrowser_config_dir }}"
+    state: directory
+    owner: "{{ filebrowser_uid | default(1000) }}"
+    group: "{{ filebrowser_gid | default(1000) }}"
+    mode: "0755"
+    recurse: true
+  tags: [filebrowser, filebrowser:dirs]
+
+- name: Ensure Filebrowser db dir exists
+  ansible.builtin.file:
+    path: "{{ filebrowser_db_dir }}"
+    state: directory
+    owner: "{{ filebrowser_uid | default(1000) }}"
+    group: "{{ filebrowser_gid | default(1000) }}"
+    mode: "0755"
+  tags: [filebrowser, filebrowser:dirs]
+
+# Optionally create the data root (no chown of existing trees)
+- name: Check if filebrowser_root_dir exists
+  ansible.builtin.stat:
+    path: "{{ filebrowser_root_dir }}"
+  register: _fb_root_pre
+  tags: [filebrowser, filebrowser:dirs]
+
+- name: Create filebrowser_root_dir (only if missing)
+  when:
+    - filebrowser_create_root_dir | default(true) | bool
+    - not _fb_root_pre.stat.exists
+  ansible.builtin.file:
+    path: "{{ filebrowser_root_dir }}"
+    state: directory
+    owner: "{{ filebrowser_uid | default(1000) }}"
+    group: "{{ filebrowser_gid | default(1000) }}"
+    mode: "0755"
+  tags: [filebrowser, filebrowser:dirs]
+
+- name: Ensure Filebrowser root dir exists (verify)
+  ansible.builtin.stat:
+    path: "{{ filebrowser_root_dir }}"
+  register: _fb_root_stat
+  tags: [filebrowser, filebrowser:dirs]
+
+- name: Fail if filebrowser_root_dir missing
+  ansible.builtin.assert:
+    that: _fb_root_stat.stat.exists
+    fail_msg: "filebrowser_root_dir '{{ filebrowser_root_dir }}' does not exist on host."
+  tags: [filebrowser, filebrowser:dirs]
+
+# =========================
+# 2) Pre-flight: networks
+# =========================
+- name: Build docker networks list (primary + optional publish)
+  ansible.builtin.set_fact:
+    _fb_networks_names: >-
+      {{
+        ([filebrowser_network_primary | default('internal_net')]
+         if (filebrowser_network_primary | default('internal_net')) else [])
+        +
+        ([filebrowser_network_publish]
+         if (filebrowser_network_publish | default('') | length > 0) else [])
+      }}
+  tags: [filebrowser, filebrowser:networks]
+
+- name: Gather info for each referenced Docker network
+  community.docker.docker_network_info:
+    name: "{{ item }}"
+  loop: "{{ _fb_networks_names }}"
+  register: _fb_nets_info
+  when: _fb_networks_names | length > 0
+  tags: [filebrowser, filebrowser:networks]
+
+# Fail early if any referenced network is missing
+- name: Fail if any referenced Docker network is missing
+  ansible.builtin.fail:
+    msg: "Docker network '{{ item.item }}' is missing. Run setup-networks.yml first."
+  when:
+    - _fb_networks_names | length > 0
+    - not (item.exists | default(false))
+  loop: "{{ _fb_nets_info.results | default([]) }}"
+  tags: [filebrowser, filebrowser:networks]
+
+# Ensure at least one attached net is NON-internal when publishing a host port
+- name: Compute if any referenced network is non-internal
+  ansible.builtin.set_fact:
+    _fb_any_non_internal: "{{ (_fb_nets_info.results | default([])) | selectattr('network.Internal','defined') | selectattr('network.Internal','equalto', false) | list | length > 0 }}"
+  when: _fb_networks_names | length > 0
+  tags: [filebrowser, filebrowser:networks]
+
+- name: Assert at least one network is non-internal for host port publishing
+  ansible.builtin.assert:
+    that: _fb_any_non_internal | default(false)
+    fail_msg: >-
+      All referenced networks are internal. Docker will NOT bind {{ filebrowser_bind_addr | default('0.0.0.0') }}:{{ filebrowser_listen_port | default(8080) }}.
+      Attach a non-internal network (e.g. set filebrowser_network_publish: "lan_pub" or "public_net").
+  when: _fb_networks_names | length > 0
+  tags: [filebrowser, filebrowser:networks]
+
+# Build the container 'networks' payload: [{'name': 'internal_net'}, ...]
+- name: Convert network names to container networks payload
+  ansible.builtin.set_fact:
+    _fb_networks: "{{ _fb_networks_names | map('regex_replace','^(.*)$','{\"name\": \"\\1\"}') | map('from_yaml') | list }}"
+  when: _fb_networks_names | length > 0
+  tags: [filebrowser, filebrowser:networks]
+
+# =====================
+# 3) Build volumes
+# =====================
+- name: Compose volumes
+  ansible.builtin.set_fact:
+    filebrowser_volumes:
+      - "{{ filebrowser_db_dir }}:/database"
+      - "{{ filebrowser_config_dir }}:/config"
+      - "{{ filebrowser_root_dir }}:/srv"
+  tags: [filebrowser, filebrowser:volumes]
+
+# --- Admin bootstrap (idempotent, safe) -----------------------------
+
+# Ensure the DB path exists; filebrowser will create the DB file if missing
+- name: Ensure Filebrowser DB directory exists
+  ansible.builtin.file:
+    path: "{{ filebrowser_db_dir }}"
+    state: directory
+    owner: "{{ filebrowser_uid | default(1000) }}"
+    group: "{{ filebrowser_gid | default(1000) }}"
+    mode: "0755"
+  tags: [filebrowser, filebrowser:bootstrap]
+
+# Try update; if that fails, create; if create says "already exists", still OK
+- name: Ensure admin user present with desired password (update-or-create)
+  community.docker.docker_container:
+    name: filebrowser-admin-ensure
+    image: "{{ filebrowser_image }}"
+    auto_remove: true
+    state: started
+    user: "{{ (filebrowser_uid | default(1000)) ~ ':' ~ (filebrowser_gid | default(1000)) }}"
+    volumes:
+      - "{{ filebrowser_db_dir }}:/database"
+    command:
+      - sh
+      - -lc
+      - |
+        set -e
+        # Try to set the password on an existing user; if that fails, attempt create.
+        if filebrowser -d /database/filebrowser.db users update \
+             "{{ filebrowser_admin_user }}" --password "{{ filebrowser_admin_pass }}"; then
+          exit 0
+        fi
+        # create; if it races / already exists, treat as success
+        if filebrowser -d /database/filebrowser.db users add \
+             "{{ filebrowser_admin_user }}" "{{ filebrowser_admin_pass }}" --perm.admin; then
+          exit 0
+        fi
+        # If add failed because user already exists, it's still fine
+        filebrowser -d /database/filebrowser.db users ls 2>/dev/null | awk 'NR>1{print $2}' \
+          | grep -Fx "{{ filebrowser_admin_user }}" && exit 0
+        # Otherwise, bubble up the error
+        echo "Could not ensure admin user exists" >&2
+        exit 1
+  register: fb_admin_ensure
+  changed_when: true
+  no_log: true
+  tags: [filebrowser, filebrowser:bootstrap]
+
+# (Optional) prove to ourselves it’s there — harmless, never fails the run
+- name: Debug (admin presence check)
+  ansible.builtin.command:
+    cmd: >
+      docker run --rm
+      -u {{ filebrowser_uid | default(1000) }}:{{ filebrowser_gid | default(1000) }}
+      -v {{ filebrowser_db_dir }}:/database
+      {{ filebrowser_image }}
+      sh -lc "filebrowser -d /database/filebrowser.db users ls | awk 'NR>1{print \$2}'"
+  register: fb_users_list
+  changed_when: false
+  failed_when: false
+  when: (ansible_verbosity | int) >= 2
+  no_log: true
+  tags: [filebrowser, filebrowser:bootstrap]
+
+# ===================================
+# 5) Ensure host port free (first-run only)
+# ===================================
+- name: Check if filebrowser container exists
+  community.docker.docker_container_info:
+    name: filebrowser
+  register: fb_info
+  failed_when: false
+  changed_when: false
+  tags: [filebrowser, filebrowser:ports]
+
+- name: Ensure {{ filebrowser_listen_port | default(8080) }} is free
+  ansible.builtin.shell: "ss -tln | awk '$4 ~ /:{{ filebrowser_listen_port | default(8080) }}$/ { print }' | wc -l"
+  register: _fb_pcheck
+  changed_when: false
+  failed_when: false
+  when: not (fb_info.exists | default(false)) or not (fb_info.container.State.Running | default(false))
+  tags: [filebrowser, filebrowser:ports]
+
+- name: Fail if port already bound (only on first run)
+  ansible.builtin.assert:
+    that: "{{ (_fb_pcheck.stdout | default('0')) | int == 0 }}"
+    fail_msg: "Port {{ filebrowser_listen_port | default(8080) }} already in use on host."
+  when: not (fb_info.exists | default(false)) or not (fb_info.container.State.Running | default(false))
+  tags: [filebrowser, filebrowser:ports]
+
+# =====================
+# 6) Run container (LAN-only)
+# =====================
+- name: Run Filebrowser container
+  community.docker.docker_container:
+    name: filebrowser
+    image: "{{ filebrowser_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    networks: "{{ _fb_networks | default([]) }}"
+    user: "{{ (filebrowser_uid | default(1000)) ~ ':' ~ (filebrowser_gid | default(1000)) }}"
+    published_ports:
+      - "{{ filebrowser_bind_addr | default('0.0.0.0') }}:{{ filebrowser_listen_port | default(8080) }}:80"
+    volumes: "{{ filebrowser_volumes }}"
+    command:
+      - "--database"
+      - "/database/filebrowser.db"
+      - "--config"
+      - "/config/settings.json"
+      - "--root"
+      - "/srv"
+    tty: false
+    state: started
+    healthcheck:
+      test: ["CMD", "sh", "-lc", "wget --spider -q 127.0.0.1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+  tags: [filebrowser, filebrowser:run]
+
+# =====================
+# 7) LAN-only firewall (ingress)
+# =====================

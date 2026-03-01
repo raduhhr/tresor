@@ -1,0 +1,47 @@
+---
+- name: Backup Jellyfin-Music (stop → snapshot → start)
+  hosts: prod
+  become: true
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/jellyfin-music"
+    container_name: "jellyfin-music"
+
+  tasks:
+    - name: Ensure backup directory exists
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Stop Jellyfin-Music container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+
+    - name: Create compressed snapshot
+      ansible.builtin.shell: |
+        DATE=$(date +%d%m%Y-%H%M)
+        tar -czf "{{ backup_dir }}/jellyfin-music-backup-$DATE.tar.gz" -C /mnt/ssd/configs jellyfin-music
+        echo "{{ backup_dir }}/jellyfin-music-backup-$DATE.tar.gz"
+      register: _snapshot
+      changed_when: true
+
+    - name: Delete snapshots older than 30 days
+      ansible.builtin.shell: |
+        find "{{ backup_dir }}" -name 'jellyfin-music-backup-*.tar.gz' -mtime +30 -delete
+      changed_when: false
+
+    - name: Start Jellyfin-Music container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: started
+
+    - name: Log backup
+      ansible.builtin.lineinfile:
+        path: /var/log/jellyfin-music-backup.log
+        line: "[{{ ansible_date_time.iso8601 }}] Snapshot created: {{ _snapshot.stdout }}"
+        create: true
+        mode: "0644"

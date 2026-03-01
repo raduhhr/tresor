@@ -1,0 +1,66 @@
+---
+- name: Ensure rsync exists on tresor (required for synchronize)
+  ansible.builtin.apt:
+    name: rsync
+    state: present
+    update_cache: false
+  become: true
+
+- name: Ensure destination directory exists on SSD
+  ansible.builtin.file:
+    path: "{{ kiwix_zim_dest_dir }}"
+    state: directory
+    owner: "{{ kiwix_uid }}"
+    group: "{{ kiwix_gid }}"
+    mode: "0755"
+  become: true
+
+- name: Ensure ZIM directory is readable by container (recurse dirs)
+  ansible.builtin.file:
+    path: "{{ kiwix_zim_dest_dir }}"
+    owner: "{{ kiwix_uid }}"
+    group: "{{ kiwix_gid }}"
+    mode: "0755"
+    recurse: true
+  become: true
+
+- name: Ensure ZIM files are readable by container (644)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "0644"
+  with_fileglob:
+    - "{{ kiwix_zim_dest_dir }}/*.zim"
+  become: true
+
+
+
+# Firewall rule for Kiwix INPUT is owned by roles/docker-firewall.
+# Run playbooks/infra/firewall.yml after deploying Kiwix.
+
+- name: Run Kiwix container serving the ZIM
+  community.docker.docker_container:
+    name: "{{ kiwix_container_name }}"
+    image: "{{ kiwix_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    command:
+      - "/data/{{ kiwix_zim_src_path | basename }}"
+    ports:
+      - "{{ kiwix_bind_addr }}:{{ kiwix_host_port }}:{{ kiwix_container_port }}"
+    volumes:
+      - "{{ kiwix_zim_dest_dir }}:/data:ro"
+    networks: "{{ kiwix_networks | map('regex_replace', '^(.*)$', '{\"name\": \"\\1\"}') | map('from_yaml') | list }}"
+    memory: "2g"
+    cpus: 1.0
+    cpu_shares: 512
+  become: true
+
+- name: Smoke test from tresor host
+  ansible.builtin.uri:
+    url: "http://{{ kiwix_bind_addr }}:{{ kiwix_host_port }}/"
+    status_code: [200, 302]
+  register: kiwix_http
+  retries: 30
+  delay: 5
+  until: kiwix_http is defined and kiwix_http.status | default(-1) in [200, 302]
+  ignore_errors: false

@@ -1,0 +1,5 @@
+---
+# roles/docker-firewall/handlers/main.yml
+
+- name: Persist iptables
+  ansible.builtin.command: netfilter-persistent save

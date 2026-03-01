@@ -1,0 +1,47 @@
+---
+- name: "Jellyfin status (LAN-only check with graceful probe)"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: jellyfin
+    jf_port: "{{ jellyfin_http_port | default(8096) }}"
+    jf_enabled: true  # set false if disabled for QA or LAN tests
+
+  tasks:
+    - name: Gather container info
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _ci
+      changed_when: false
+
+    - name: Note when Jellyfin is disabled
+      ansible.builtin.debug:
+        msg: "Jellyfin is disabled for this host; skipping runtime checks."
+      when: not jf_enabled
+
+    - name: Assert container absent when disabled
+      ansible.builtin.assert:
+        that:
+          - not _ci.exists
+        fail_msg: "Jellyfin is disabled but the container exists."
+      when: not jf_enabled
+
+    - name: Assert container is running
+      ansible.builtin.assert:
+        that:
+          - _ci.exists
+          - _ci.container.State.Running
+          - _ci.container.State.ExitCode == 0
+        fail_msg: "Jellyfin container not healthy or not running."
+      when: jf_enabled
+
+    - name: Probe Jellyfin web UI
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ jf_port }}/web/index.html"
+        status_code: 200
+        return_content: false
+      changed_when: false
+      when: jf_enabled
+

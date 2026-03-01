@@ -1,0 +1,48 @@
+---
+- name: "Prometheus status (graceful check with HTTP probe)"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: prometheus
+    prom_host: "{{ prometheus_bind_addr | default('127.0.0.1') }}"
+    prom_port: "{{ prometheus_host_port | default(9090) }}"
+    prom_http_probe: "{{ prometheus_expose_host_port | default(true) | bool }}"
+    prom_enabled: true
+
+  tasks:
+    - name: Gather container info
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _ci
+      changed_when: false
+
+    - name: Note when Prometheus is disabled
+      ansible.builtin.debug:
+        msg: "Prometheus is disabled for this host; skipping runtime checks."
+      when: not prom_enabled
+
+    - name: Assert container absent when disabled
+      ansible.builtin.assert:
+        that:
+          - not _ci.exists
+        fail_msg: "Prometheus is disabled but the container exists."
+      when: not prom_enabled
+
+    - name: Assert container is running
+      ansible.builtin.assert:
+        that:
+          - _ci.exists
+          - _ci.container.State.Running
+          - _ci.container.State.ExitCode == 0
+        fail_msg: "Prometheus container not healthy or not running."
+      when: prom_enabled
+
+    - name: Probe Prometheus health endpoint
+      ansible.builtin.uri:
+        url: "http://{{ prom_host }}:{{ prom_port }}/-/healthy"
+        status_code: 200
+        return_content: false
+      changed_when: false
+      when: prom_enabled and prom_http_probe

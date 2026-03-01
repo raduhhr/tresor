@@ -1,0 +1,36 @@
+---
+- name: "steam-free-notifier status (cron health check)"
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    cron_file: "/etc/cron.d/steam-free-notifier"
+    script_path: "/opt/steam-free-notifier/bot.py"
+
+  tasks:
+    - name: Check cron file exists
+      ansible.builtin.stat:
+        path: "{{ cron_file }}"
+      register: _cron
+
+    - name: Assert cron job is installed
+      ansible.builtin.assert:
+        that: _cron.stat.exists
+        fail_msg: "Cron file {{ cron_file }} missing — run deploy."
+
+    - name: Check bot script exists
+      ansible.builtin.stat:
+        path: "{{ script_path }}"
+      register: _script
+
+    - name: Assert script is installed
+      ansible.builtin.assert:
+        that: _script.stat.exists
+        fail_msg: "Script {{ script_path }} missing — run deploy."
+
+    - name: Show status summary
+      ansible.builtin.debug:
+        msg:
+          cron: "{{ _cron.stat.exists | ternary('installed', 'MISSING') }}"
+          script: "{{ _script.stat.exists | ternary('installed', 'MISSING') }}"

@@ -1,0 +1,12 @@
+---
+- name: Restart filebrowser-public
+  hosts: prod
+  gather_facts: false
+  tasks:
+    - name: Restart filebrowser-public container
+      community.docker.docker_container:
+        name: filebrowser-public
+        state: started
+        restart: true
+    - ansible.builtin.debug:
+        msg: "filebrowser-public restarted"

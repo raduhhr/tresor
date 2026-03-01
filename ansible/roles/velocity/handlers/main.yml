@@ -1,0 +1,9 @@
+---
+- name: daemon-reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart velocity
+  ansible.builtin.systemd:
+    name: "{{ velocity_service_name }}"
+    state: restarted

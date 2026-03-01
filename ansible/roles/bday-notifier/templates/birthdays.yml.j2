@@ -1,0 +1,13 @@
+timezone: {{ bday_notifier_timezone }}
+
+people:
+{% for p in bday_notifier_people %}
+  - name: "{{ p.name }}"
+    date: "{{ p.date }}"
+{% endfor %}
+
+discord:
+  webhook_envs:
+{% for env in bday_notifier_webhook_envs %}
+    - {{ env | to_json }}
+{% endfor %}

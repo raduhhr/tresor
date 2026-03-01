@@ -1,0 +1,5 @@
+# Managed by Ansible - content-notifier
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+{{ content_notifier_cron_minute }} * * * * {{ content_notifier_run_user }} {{ content_notifier_app_dir }}/content-notifier.sh >> {{ content_notifier_log_file }} 2>&1

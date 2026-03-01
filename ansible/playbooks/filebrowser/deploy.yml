@@ -1,0 +1,23 @@
+- hosts: tresor
+  become: true
+  name: Deploy Filebrowser (LAN-only on internal_net + lan_pub for publishing)
+
+  pre_tasks:
+    - name: Ensure internal_net exists (idempotent)
+      community.docker.docker_network:
+        name: internal_net
+        driver: bridge
+        internal: true
+        driver_options:
+          com.docker.network.bridge.name: br-internal_net
+
+    - name: Ensure lan_pub exists (idempotent)
+      community.docker.docker_network:
+        name: lan_pub
+        driver: bridge
+        internal: false
+        driver_options:
+          com.docker.network.bridge.name: br-lan_pub
+
+  roles:
+    - filebrowser

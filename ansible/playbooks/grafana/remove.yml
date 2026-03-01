@@ -1,0 +1,10 @@
+---
+- name: Remove grafana container
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove grafana container
+      community.docker.docker_container:
+        name: grafana
+        state: absent
+        force_kill: true

@@ -1,0 +1,54 @@
+---
+# WireGuard SERVER on VPS (binds 10.66.66.1/24, listens 51820/udp)
+- name: VPS | WireGuard server
+  hosts: vps          # ← use the same inventory group everywhere
+  become: true
+  gather_facts: false
+
+  vars:
+    wg_interface: "wg0"
+    wg_address: "10.66.66.1/24"
+    wg_listen_port: 51820
+    wg_mtu: 1420
+    wg_table: "auto"
+    wg_dns: []
+
+    # Keys (keep in vault ideally)
+    wg_private_key: "{{ vault_vps_wireguard_private_key | default('') }}"
+    wg_private_key_file: "/etc/wireguard/privatekey"
+
+    # Peers (Tresor client)
+    wg_peers:
+      - name: "tresor"
+        public_key: "{{ vault_tresor_pub }}"
+        preshared_key: "{{ vault_wg_psk | default(omit) }}"
+        allowed_ips:
+          - "10.66.66.2/32"
+
+    # Service behavior
+    wg_enable: true
+    wg_state: "started"
+
+    # Firewall (open UDP 51820 on VPS)
+    wg_manage_ufw: true
+
+  roles:
+    - role: wireguard-server
+
+  post_tasks:
+    - name: Show wg server facts (from role)
+      debug:
+        msg:
+          server_ip: "{{ hostvars[inventory_hostname].wg_server_ip | default('n/a') }}"
+          listen: "udp/{{ wg_listen_port }}"
+          peers: "{{ wg_peers | map(attribute='name') | list }}"
+
+    - name: Display handshake status
+      become: true
+      ansible.builtin.command: "wg show"
+      register: _wg_srv
+      changed_when: false
+
+    - name: Handshake snippet
+      ansible.builtin.debug:
+        msg: "{{ _wg_srv.stdout | regex_search('latest handshake:.*', multiline=True) | default('No handshake yet (run client next).') }}"

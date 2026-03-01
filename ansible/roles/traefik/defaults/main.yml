@@ -1,0 +1,12 @@
+---
+# defaults file for traefik
+
+# Default config directory (override in group_vars if needed)
+traefik_config_dir: "/mnt/ssd/configs/traefik"
+
+# Host bind address/port for local dev (set via traefik: dict in group_vars).
+# Null by default → no host port publishing (correct for prod with CF Tunnel).
+# tasks/main.yml checks `is not none` before building published_ports, so these
+# null sentinels correctly produce an empty published_ports list for prod.
+traefik_bind_host: ~
+traefik_bind_port: ~

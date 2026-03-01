@@ -1,0 +1,21 @@
+---
+- name: Start Jellyfin
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: jellyfin
+
+  tasks:
+    - name: Ensure Jellyfin container is started
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: started
+      register: _start
+
+    - name: Show status after start
+      ansible.builtin.debug:
+        msg: "Jellyfin started successfully"
+      when: _start.changed
+

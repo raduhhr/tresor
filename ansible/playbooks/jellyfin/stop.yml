@@ -1,0 +1,21 @@
+---
+- name: Stop Jellyfin
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: jellyfin
+
+  tasks:
+    - name: Stop Jellyfin container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+      register: _stop
+
+    - name: Show status after stop
+      ansible.builtin.debug:
+        msg: "Jellyfin stopped successfully"
+      when: _stop.changed
+

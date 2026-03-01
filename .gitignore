@@ -1,0 +1,71 @@
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.Spotlight-V100
+.Trashes
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.history/
+.fleet/
+*.code-workspace
+
+# --- Runtime envs & builds (future-proof for landing site / MC frontend) ---
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+dist/
+build/
+.next/
+.out/
+coverage/
+
+# --- Ansible noise & local variants ---
+*.retry
+*.log
+# Dumps created by helper scripts
+ansible_dump_*.txt
+tresor_dump_*.txt
+# Optional local inventory you might keep next to hosts.ini
+inventory/hosts.local.ini
+
+# --- Secrets / keys (NEVER commit these) ---
+# (Your vault password is outside the repo, keep it that way.)
+*.pem
+*.key
+*.crt
+*.p12
+*.der
+*.pfx
+*.kubeconfig
+*.secrets*
+*vault*pass*
+*password*
+*passwd*
+
+# Common app env files
+.env
+.env.*
+.envrc
+!.env.example
+!.env.sample
+
+# --- Traefik / Cloudflare sensitive runtime files (if ever staged locally) ---
+**/traefik/acme.json
+**/traefik/letsencrypt/
+**/cloudflared/cert.pem
+**/cloudflared/*.json
+**/cf-tunnel/cert.pem
+
+# --- Backups & misc temporaries ---
+backups/
+*.bak
+*.old
+*.orig
+*.tmp

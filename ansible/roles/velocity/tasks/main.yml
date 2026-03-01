@@ -1,0 +1,198 @@
+---
+############################
+# 0) Preconditions
+############################
+
+
+- name: End host if disabled
+  ansible.builtin.meta: end_host
+  when: not velocity_enabled | bool
+
+- name: Assert required vars
+  ansible.builtin.assert:
+    that:
+      - velocity_forwarding_mode in ['none','modern']
+      - paper_backend_host is defined
+      - paper_backend_port is defined
+      - velocity_jar_url is defined
+      - velocity_host is defined
+      - velocity_port is defined
+    fail_msg: "Missing/bad vars: forwarding mode, paper_backend_*, velocity_jar_url, velocity_host/port."
+
+############################
+# 1) System users & packages
+############################
+- name: Ensure group exists
+  ansible.builtin.group:
+    name: "{{ velocity_group }}"
+    gid: "{{ velocity_gid }}"
+    state: present
+
+- name: Ensure user exists
+  ansible.builtin.user:
+    name: "{{ velocity_user }}"
+    uid: "{{ velocity_uid }}"
+    group: "{{ velocity_group }}"
+    home: "{{ velocity_home }}"
+    shell: /usr/sbin/nologin
+    create_home: false
+    system: true
+
+- name: Install Java runtime
+  ansible.builtin.apt:
+    name: "{{ velocity_java_pkg }}"
+    state: present
+    update_cache: yes
+
+############################
+# 2) Filesystem layout
+############################
+- name: Create Velocity home
+  ansible.builtin.file:
+    path: "{{ velocity_home }}"
+    state: directory
+    owner: "{{ velocity_user }}"
+    group: "{{ velocity_group }}"
+    mode: "0755"
+
+- name: Create plugins directory
+  ansible.builtin.file:
+    path: "{{ velocity_home }}/plugins"
+    state: directory
+    owner: "{{ velocity_user }}"
+    group: "{{ velocity_group }}"
+    mode: "0755"
+
+############################
+# 3) Binaries & config
+############################
+- name: Download velocity.jar (pinned, retry-safe)
+  ansible.builtin.get_url:
+    url: "{{ velocity_jar_url }}"
+    dest: "{{ velocity_jar }}"
+    mode: "0644"
+    owner: "{{ velocity_user }}"
+    group: "{{ velocity_group }}"
+    checksum: "{{ (velocity_download_checksum | trim) if (velocity_download_checksum | default('') | length > 0) else omit }}"
+    timeout: 30
+  register: _jar_dl
+  retries: 3
+  delay: 3
+  until: _jar_dl is succeeded
+  notify: restart velocity
+
+- name: Write Velocity forwarding.secret (0400, velocity-owned)
+  ansible.builtin.copy:
+    dest: "{{ velocity_home }}/forwarding.secret"
+    owner: "{{ velocity_user }}"
+    group: "{{ velocity_group }}"
+    mode: "0400"
+    content: "{{ velocity_forwarding_secret | trim }}"
+  no_log: true
+  when: velocity_forwarding_mode == 'modern'
+
+
+- name: Ensure config/ directory exists
+  ansible.builtin.file:
+    path: "{{ velocity_home }}/config"
+    state: directory
+    owner: "{{ velocity_user }}"
+    group: "{{ velocity_group }}"
+    mode: "0755"
+
+- name: Render velocity.toml in working dir
+  ansible.builtin.template:
+    src: velocity.toml.j2
+    dest: "{{ velocity_home }}/velocity.toml"
+    owner: "{{ velocity_user }}"
+    group: "{{ velocity_group }}"
+    mode: "0644"
+  notify: restart velocity
+
+
+- name: Validate velocity.toml exists and is not corrupt
+  ansible.builtin.shell: |
+    set -e
+    test -f "{{ velocity_home }}/velocity.toml" || exit 1
+    grep -Eq '^player-info-forwarding-mode\s*=\s*"MODERN"' "{{ velocity_home }}/velocity.toml"
+
+- name: Render servers.toml (backend map)
+  ansible.builtin.template:
+    src: servers.toml.j2
+    dest: "{{ velocity_home }}/servers.toml"
+    owner: "{{ velocity_user }}"
+    group: "{{ velocity_group }}"
+    mode: "0644"
+  when: velocity_manage_servers | bool
+  notify: restart velocity
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: velocity.service.j2
+    dest: "/etc/systemd/system/{{ velocity_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - daemon-reload
+    - restart velocity
+
+############################
+# 4) Enable + verify
+############################
+- name: Optionally open UFW for public port
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    to_port: "{{ velocity_port }}"
+  when: velocity_manage_firewall | default(true) | bool
+
+- name: Enable and start velocity service
+  ansible.builtin.systemd:
+    name: "{{ velocity_service_name }}"
+    state: started
+    enabled: true
+
+- name: Wait for Velocity to start (poll with ss)
+  ansible.builtin.shell: |
+    for i in {1..60}; do
+      if ss -ltn | grep -q ':{{ velocity_port }}'; then
+        exit 0
+      fi
+      sleep 2
+    done
+    exit 1
+
+- name: Check listening sockets
+  ansible.builtin.command: "ss -H -lnpt 'sport = :{{ velocity_port }}'"
+  register: _ss
+  changed_when: false
+
+- name: Validate Velocity bind
+  ansible.builtin.assert:
+    that:
+      - _ss.stdout is search('LISTEN')
+      - >
+        (
+          velocity_host != '0.0.0.0'
+          and _ss.stdout is search(velocity_host | regex_escape ~ ':' ~ velocity_port | string ~ '\\b')
+        )
+        or
+        ( velocity_host == '0.0.0.0' and (
+            _ss.stdout is search('\\*:' ~ velocity_port | string ~ '\\b')
+            or _ss.stdout is search('0\\.0\\.0\\.0:' ~ velocity_port | string ~ '\\b')
+            or _ss.stdout is search('\\[::\\]:' ~ velocity_port | string ~ '\\b')
+          )
+        )
+    fail_msg: >-
+      Velocity not bound as expected. Wanted {{ velocity_host }}:{{ velocity_port }}.
+      Got: {{ _ss.stdout }}
+
+- name: Print summary
+  ansible.builtin.debug:
+    msg:
+      service: "{{ velocity_service_name }}"
+      bind: "{{ velocity_host }}:{{ velocity_port }}"
+      backend: "{{ paper_backend_host }}:{{ paper_backend_port }}"
+      jar: "{{ velocity_jar_url }}"
+      checksum_used: "{{ (velocity_download_checksum | default('')) | length > 0 }}"

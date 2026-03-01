@@ -1,0 +1,47 @@
+---
+- name: "Kiwix status (graceful check with HTTP probe)"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: kiwix
+    kiwix_host: "{{ kiwix_bind_addr | default('127.0.0.1') }}"
+    kiwix_port: "{{ kiwix_host_port | default(8181) }}"
+    kiwix_enabled: true
+
+  tasks:
+    - name: Gather container info
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _ci
+      changed_when: false
+
+    - name: Note when Kiwix is disabled
+      ansible.builtin.debug:
+        msg: "Kiwix is disabled for this host; skipping runtime checks."
+      when: not kiwix_enabled
+
+    - name: Assert container absent when disabled
+      ansible.builtin.assert:
+        that:
+          - not _ci.exists
+        fail_msg: "Kiwix is disabled but the container exists."
+      when: not kiwix_enabled
+
+    - name: Assert container is running
+      ansible.builtin.assert:
+        that:
+          - _ci.exists
+          - _ci.container.State.Running
+          - _ci.container.State.ExitCode == 0
+        fail_msg: "Kiwix container not healthy or not running."
+      when: kiwix_enabled
+
+    - name: Probe Kiwix web UI
+      ansible.builtin.uri:
+        url: "http://{{ kiwix_host }}:{{ kiwix_port }}/"
+        status_code: 200
+        return_content: false
+      changed_when: false
+      when: kiwix_enabled

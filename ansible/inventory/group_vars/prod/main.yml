@@ -1,0 +1,64 @@
+---
+# Default: no dashboard at all
+traefik_dashboard_mode: "off"
+traefik_dashboard_local_port: 8081
+
+traefik_basic_auth_users:
+  - "{{ vault_traefik_htpasswd_userline }}"
+
+# Cloudflared (token mode; routing managed in CF dashboard)
+cloudflared:
+  enabled: true
+  network: public_net
+  tz: UTC
+  enable_metrics: false
+  metrics_port: 8086
+  token: "{{ vault_cloudflared_token }}"
+
+# roles/docker/defaults/main.yml  (or group_vars/*)
+# userns-remap is controlled via docker_userns_remap in roles/docker/defaults/main.yml
+docker_data_root: "/mnt/ssd/containers"
+docker_pkg_version: ""                    # if pin versions, leave as-is
+docker_hold: false
+docker_group_members: ["ansible"]         # or whoever should talk to docker
+
+# jellyfin (LAN-only)
+jellyfin_network: internal_net
+jellyfin_media_dirs:
+  - /mnt/data/media
+jellyfin_photos_jpg_dir: /mnt/data/photos/jpg
+jellyfin_listen_port: 8096
+jellyfin_bind_addr: "192.168.1.100"
+jellyfin_enable_vaapi: true
+
+# jellyfin-music (public via VPS over WG)
+jellyfin_music_container_name: jellyfin-music
+jellyfin_music_network: internal_net
+
+jellyfin_music_uid: 1000
+jellyfin_music_group_name: mediausers
+
+jellyfin_music_config_dir: /mnt/ssd/configs/jellyfin-music
+jellyfin_music_media_dir: /mnt/data/files/Music
+
+jellyfin_music_container_port: 8096
+jellyfin_music_listen_port: 18096
+jellyfin_music_published_url: "https://music.example.com"
+
+jellyfin_music_wg_iface: wg0
+jellyfin_music_bind_addr: 10.66.66.2
+
+# ── Bind tresor_versions → flat role vars ──────────────────────────────────
+paper_image:          "{{ tresor_versions.minecraft_server_image }}"
+paper_version:        "{{ tresor_versions.minecraft_server_version }}"
+filebrowser_image:    "{{ tresor_versions.filebrowser_image }}"
+filebrowser_public_image: "{{ tresor_versions.filebrowser_image }}"
+grafana_image:        "{{ tresor_versions.grafana_image }}"
+jellyfin_image:       "{{ tresor_versions.jellyfin_image }}"
+jellyfin_music_image: "{{ tresor_versions.jellyfin_music_image }}"
+kiwix_image:          "{{ tresor_versions.kiwix_image }}"
+uptime_kuma_image:    "{{ tresor_versions.uptime_kuma_image }}"
+prometheus_image:     "{{ tresor_versions.prometheus_image }}"
+node_exporter_image:  "{{ tresor_versions.node_exporter_image }}"
+cadvisor_image:       "{{ tresor_versions.cadvisor_image }}"
+# traefik and cloudflared are handled inside their tasks

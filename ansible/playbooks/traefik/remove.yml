@@ -1,0 +1,10 @@
+---
+- name: Remove traefik container
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove traefik container
+      community.docker.docker_container:
+        name: traefik
+        state: absent
+        force_kill: true

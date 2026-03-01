@@ -1,0 +1,38 @@
+---
+- name: Remove content-notifier
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    content_notifier_app_dir: "/opt/content-notifier"
+    content_notifier_config_dir: "/mnt/ssd/configs/content-notifier"
+    content_notifier_log_file: "/var/log/content-notifier.log"
+
+  tasks:
+    - name: Remove cron job
+      file:
+        path: /etc/cron.d/content-notifier
+        state: absent
+
+    - name: Remove logrotate config
+      file:
+        path: /etc/logrotate.d/content-notifier
+        state: absent
+
+    - name: Remove app dir
+      file:
+        path: "{{ content_notifier_app_dir }}"
+        state: absent
+
+    # Keep config dir/state by default (safer). Uncomment if you want full purge.
+    # - name: Remove config dir (state/env)
+    #   file:
+    #     path: "{{ content_notifier_config_dir }}"
+    #     state: absent
+
+    # Keep logs by default. Uncomment to remove.
+    # - name: Remove log file
+    #   file:
+    #     path: "{{ content_notifier_log_file }}"
+    #     state: absent

@@ -1,0 +1,57 @@
+---
+- name: Reset content-notifier state (no-spam seed)
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    content_notifier_run_user: "ansible"
+    content_notifier_run_group: "ansible"
+    content_notifier_config_dir: "/mnt/ssd/configs/content-notifier"
+    content_notifier_state_file: "{{ content_notifier_config_dir }}/state.json"
+    content_notifier_log_file: "/var/log/content-notifier.log"
+    content_notifier_wrapper: "/opt/content-notifier/content-notifier.sh"
+
+    # If true, zero the log for clean testing
+    content_notifier_truncate_log: true
+
+  tasks:
+    - name: Ensure config dir exists
+      file:
+        path: "{{ content_notifier_config_dir }}"
+        state: directory
+        owner: root
+        group: "{{ content_notifier_run_group }}"
+        mode: "0770"
+
+    - name: Reset state file to empty
+      copy:
+        dest: "{{ content_notifier_state_file }}"
+        content: |
+          {
+            "version": 1,
+            "items": {}
+          }
+        owner: root
+        group: "{{ content_notifier_run_group }}"
+        mode: "0640"
+
+    - name: Optionally truncate log file
+      copy:
+        dest: "{{ content_notifier_log_file }}"
+        content: ""
+        owner: "{{ content_notifier_run_user }}"
+        group: "{{ content_notifier_run_group }}"
+        mode: "0640"
+      when: content_notifier_truncate_log | bool
+
+    - name: Run one-time seed scan (as runtime user)
+      become: true
+      become_user: "{{ content_notifier_run_user }}"
+      command: "{{ content_notifier_wrapper }}"
+      register: seed_run
+      changed_when: false
+
+    - name: Show seed run stdout
+      debug:
+        var: seed_run.stdout_lines

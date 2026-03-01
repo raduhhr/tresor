@@ -1,0 +1,11 @@
+---
+# roles/docker-firewall/meta/main.yml
+galaxy_info:
+  role_name: docker-firewall
+  description: >
+    Centralised iptables management for Tresor.
+    Bind addresses are the primary firewall — this role handles
+    DOCKER-USER edge cases, INPUT hygiene, and UFW orphan cleanup.
+  author: admin
+  license: MIT
+dependencies: []

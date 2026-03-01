@@ -1,0 +1,6 @@
+---
+- name: Deploy Uptime Kuma (public_net)
+  hosts: tresor
+  become: true
+  roles:
+    - uptime-kuma

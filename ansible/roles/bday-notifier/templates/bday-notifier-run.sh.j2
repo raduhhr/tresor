@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# load secrets for cron
+set -a
+source {{ bday_notifier_env_path }}
+set +a
+
+exec /usr/bin/python3 {{ bday_notifier_script_path }}

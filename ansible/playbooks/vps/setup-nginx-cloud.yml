@@ -1,0 +1,47 @@
+---
+# Adds the cloud.example.com vhost to the existing nginx on tresor-vps.
+#
+# Uses the nginx-music role with tasks_from: cloud.
+# nginx is already installed and running (setup-nginx-music.yml did that).
+# This playbook only adds cloud.conf + issues a LE cert for cloud.example.com.
+#
+# Traffic path after this playbook:
+#   internet → cloud.example.com:443
+#   → nginx on tresor-vps (same process as music.example.com)
+#   → WireGuard (10.66.66.1 → 10.66.66.2:8082)
+#   → filebrowser-public container → /mnt/data/cloud
+#
+# Pre-requisites:
+#   1. filebrowser-public running on Tresor:
+#        ansible-playbook -i inventory/hosts.ini playbooks/filebrowser-public/deploy.yml
+#   2. DNS A record: cloud.example.com → 1.2.3.4  (same IP as music)
+#   3. WireGuard tunnel up: ssh tresor-vps 'sudo wg show'
+#   4. vault_acme_email set in vps vault (already used by setup-nginx-music.yml)
+
+- name: "VPS | cloud.example.com vhost → filebrowser-public via WireGuard"
+  hosts: vps
+  gather_facts: true
+  become: true
+
+  pre_tasks:
+    - name: Verify WireGuard connectivity to filebrowser-public
+      ansible.builtin.shell:
+        cmd: "timeout 3 bash -c 'echo > /dev/tcp/10.66.66.2/8082' && echo ok || echo fail"
+        executable: /bin/bash
+      register: _wg_check
+      changed_when: false
+      failed_when: false
+
+    - name: Warn if backend unreachable (deploy filebrowser-public on Tresor first)
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: 10.66.66.2:8082 not reachable from VPS.
+          Run playbooks/filebrowser-public/deploy.yml on Tresor first,
+          then check 'sudo wg show' on both ends.
+      when: _wg_check.stdout | default('fail') != 'ok'
+
+  tasks:
+    - name: Add cloud.example.com vhost to nginx-music
+      ansible.builtin.include_role:
+        name: nginx-music
+        tasks_from: cloud

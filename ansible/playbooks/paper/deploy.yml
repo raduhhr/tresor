@@ -1,0 +1,29 @@
+---
+- name: Deploy Paper (WG-only bind on Tresor, mc_net, locked to VPS WG peer)
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    # Network & paths
+    mc_net: "mc_net"
+    wg_bind_ip: "{{ hostvars[inventory_hostname].wg_ip | default(hostvars[inventory_hostname].wg_bind_ip | default('10.66.66.2')) }}"
+    vps_wg_ip: "{{ hostvars['tresor-vps'].wg_server_ip | default('10.66.66.1') }}"
+
+    # Paper settings
+    paper_container: "paper"
+    paper_uid: 1000
+    paper_gid: 1000
+    paper_memory: "4G"
+    paper_whitelist: "TRUE"
+    paper_apply_live: false
+    paper_rcon_enable: "FALSE"
+    paper_rcon_port: "25575"
+    
+    # Velocity secret
+    velocity_secret: "{{ vault_velocity_forwarding_secret }}"
+
+  roles:
+    - role: paper
+      vars:
+       velocity_forwarding_secret: "{{ velocity_secret }}"

@@ -1,0 +1,67 @@
+---
+hostname: "tresor-vps"
+
+ansible_user: ansible
+ansible_ssh_private_key_file: "{{ lookup('env','HOME') }}/.ssh/id_ed25519_homelab_vps"
+
+############################
+# WireGuard (VPS = server)
+############################
+wireguard_role: "server"
+wireguard_iface: "wg0"
+wireguard_listen_port: 51820
+wireguard_address: "10.66.66.1/24"
+wireguard_peers:
+  - name: "tresor"
+    address: "10.66.66.2/32"
+    public_key: "{{ vault_tresor_pub }}"
+    preshared_key: "{{ vault_wg_psk }}"
+    keepalive: 25
+
+############################
+# Velocity (systemd, no Docker)
+############################
+velocity_enabled: true
+# velocity_forwarding_secret is defined canonically in group_vars/all/main.yml.
+# IMPORTANT: vault_velocity_forwarding_secret must be the SAME value in BOTH
+# the prod vault (used by tresor) and the vps vault (used by tresor-vps).
+# A mismatch silently breaks all player connections with no clear error.
+velocity_home: /opt/velocity
+
+# Bind Velocity publicly on the VPS (players connect here)
+velocity_host: "0.0.0.0"
+velocity_port: 25565
+velocity_manage_firewall: true  # was: velocity_allow_ufw (dead var, renamed to match role default)
+
+# Binary & memory tuning
+# Pin an exact jar/build you trust; leave as-is if your role downloads it.
+velocity_jar_url: "https://api.papermc.io/v2/projects/velocity/versions/3.4.0-SNAPSHOT/builds/559/downloads/velocity-3.4.0-SNAPSHOT-559.jar"
+velocity_max_memory: "1500M"
+velocity_jar: "/opt/velocity/velocity.jar"
+
+# JVM/metadata
+velocity_tz: "UTC"
+velocity_motd: "<green>Tresor <gray>| <white>Velocity proxy"
+velocity_online_mode: false
+velocity_log_level: "info"
+velocity_forwarding_mode: "modern"
+
+# Backend (Tresor Paper over WireGuard)
+paper_backend_host: "10.66.66.2"
+paper_backend_port: 25565
+
+############################
+# Firewall baseline (UFW)
+############################
+# UDP WG server port open to WAN
+ufw_allowed_udp_ports:
+  - 51820
+
+# TCP Velocity exposed publicly on the VPS for player ingress
+ufw_allowed_tcp_ports:
+  - 25565
+
+
+# nginx for public music streaming
+vault_acme_email: "admin@example.com"
+  

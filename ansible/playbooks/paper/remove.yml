@@ -1,0 +1,10 @@
+---
+- name: Remove paper container
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove paper container
+      community.docker.docker_container:
+        name: paper
+        state: absent
+        force_kill: true

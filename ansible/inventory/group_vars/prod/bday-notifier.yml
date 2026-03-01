@@ -1,0 +1,17 @@
+# Add birthdays here.
+# Format: YYYY-MM-DD
+
+# Redeploy role after changes with this:
+# ansible-playbook playbooks/bday-notifier/deploy.yml --limit tresor
+
+bday_notifier_people:
+  - name: "Alice Example"
+    date: "1990-01-15"
+  - name: "Bob Example"
+    date: "1992-06-20"
+  - name: "Charlie Example"
+    date: "1988-11-05"
+
+
+bday_notifier_discord_webhooks:
+  BDAY_DISCORD_WEBHOOK_PRIVATE: "{{ vault_bday_discord_webhook_private }}"

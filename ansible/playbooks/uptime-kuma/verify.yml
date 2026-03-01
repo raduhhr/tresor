@@ -1,0 +1,16 @@
+---
+- hosts: tresor
+  become: true
+  tasks:
+    - name: Confirm Uptime Kuma container is running
+      community.docker.docker_container_info:
+        name: uptime-kuma
+      register: kuma_info
+
+    - name: Show Uptime Kuma container summary
+      debug:
+        msg:
+          Name: "{{ kuma_info.container.Name }}"
+          Image: "{{ kuma_info.container.Config.Image }}"
+          Status: "{{ kuma_info.container.State.Status }}"
+          Networks: "{{ kuma_info.container.NetworkSettings.Networks.keys() | list }}"

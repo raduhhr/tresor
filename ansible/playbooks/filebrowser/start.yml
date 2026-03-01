@@ -1,0 +1,21 @@
+---
+- name: Start FileBrowser
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: filebrowser
+
+  tasks:
+    - name: Ensure FileBrowser container is started
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: started
+      register: _start
+
+    - name: Show status after start
+      ansible.builtin.debug:
+        msg: "FileBrowser started successfully"
+      when: _start.changed
+

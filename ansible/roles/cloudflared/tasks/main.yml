@@ -1,0 +1,132 @@
+---
+# TOKEN-ONLY cloudflared (no config files / no tunnel_id)
+
+# 0) Merge overrides with sane defaults (no inline comments here)
+- name: Normalize overrides
+  ansible.builtin.set_fact:
+    _cf_overrides: "{{ cloudflared if (cloudflared is mapping) else {} }}"
+
+- name: Build effective config (token mode)
+  ansible.builtin.set_fact:
+    cf: "{{ {
+            'enabled': true,
+            'image': tresor_versions.cloudflared_image,
+            'name': 'cloudflared',
+            'tz': 'UTC',
+            'network': 'public_net',
+            'enable_metrics': true,
+            'metrics_port': 8086,
+            'auto_update': false,
+            'log_driver': 'journald'
+          } | combine(_cf_overrides, recursive=True) }}"
+
+# 0.1) Guard
+- name: Abort cloudflared on this host when disabled
+  meta: end_host
+  when: not (cf.enabled | default(true))
+
+# Accept token from multiple places, without printing it
+- name: Derive token into cf.token (inventory, vault, env, or extra var)
+  no_log: true
+  ansible.builtin.set_fact:
+    cf: "{{ cf | combine({
+           'token': (
+             (cloudflared.token | default(omit))
+             | default(vault_cloudflared_token | default(omit))
+             | default(cf_token | default(omit))
+             | default(lookup('env','CF_TUNNEL_TOKEN') | default('', true))
+           )
+         }, recursive=True) }}"
+
+# 0.2) Require token
+- name: Assert token present
+  ansible.builtin.assert:
+    that:
+      - cf.token is defined
+      - (cf.token | length) > 20
+    fail_msg: "cloudflared.token missing/too short (set it in group_vars/prod/vault.yml)."
+
+# 0.3) Ensure network exists (defensive)
+- name: Ensure network exists
+  community.docker.docker_network:
+    name: "{{ cf.network }}"
+    driver: bridge
+    internal: false
+    # IPAM driven by tresor_networks so subnet doesn't conflict with manually-managed bridges
+    ipam_config: >-
+      {{
+        tresor_networks
+        | selectattr('name', 'equalto', cf.network)
+        | map(attribute='subnet')
+        | map('regex_replace', '^(.*)$', '{"subnet": "\\1"}')
+        | map('from_yaml') | list
+        | default(omit, true)
+      }}
+
+# 0.4) Ensure metrics port is free (only if enabled)
+- name: Check if metrics port is free
+  when: cf.enable_metrics | bool
+  ansible.builtin.shell: |
+    ss -lnt '( sport = :{{ cf.metrics_port }} )' | tail -n +2 | wc -l
+  register: _metrics_in_use
+  changed_when: false
+
+- name: Fail if metrics port is occupied
+  when:
+    - cf.enable_metrics | bool
+    - (_metrics_in_use.stdout | int) > 0
+  ansible.builtin.fail:
+    msg: "Metrics port {{ cf.metrics_port }} is already in use on 127.0.0.1."
+
+# 1) Run container (token mode)
+- name: Run cloudflared (token mode)
+  community.docker.docker_container:
+    name: "{{ cf.name }}"
+    image: "{{ cf.image }}"
+    pull: true
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ cf.network }}"
+    env:
+      TZ: "{{ cf.tz }}"
+    command: >
+      tunnel
+      {% if not (cf.auto_update | bool) %} --no-autoupdate {% endif %}
+      run --token {{ cf.token }}
+    published_ports: >-
+      {{
+        ( cf.enable_metrics | bool )
+        | ternary( [ "127.0.0.1:" ~ (cf.metrics_port | string) ~ ":" ~ (cf.metrics_port | string) ], [] )
+      }}
+    log_driver: "{{ cf.log_driver }}"
+    state: started
+  register: _cf_run
+
+# 2) Status
+- name: Wait until cloudflared is running
+  community.docker.docker_container_info:
+    name: "{{ cf.name }}"
+  register: _cfi
+  retries: 10
+  delay: 2
+  until: _cfi.exists and (_cfi.container.State.Running | default(false))
+  changed_when: false
+
+- name: Assert cloudflared healthy
+  ansible.builtin.assert:
+    that:
+      - _cfi.exists
+      - _cfi.container.State.Running
+      - _cfi.container.State.ExitCode == 0
+    fail_msg: "cloudflared container not healthy (check docker logs)."
+
+
+# 3) Optional metrics probe
+- name: Probe /metrics (local)
+  when: cf.enable_metrics | bool
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ cf.metrics_port }}/metrics"
+    status_code: 200
+    return_content: false
+  changed_when: false
+

@@ -1,0 +1,101 @@
+---
+- name: Backup content-notifier (app + config + cron + logrotate + optional log)
+  hosts: prod
+  become: true
+  gather_facts: true
+
+  vars:
+    content_notifier_app_dir: "/opt/content-notifier"
+    content_notifier_config_dir: "/mnt/ssd/configs/content-notifier"
+    content_notifier_cron_file: "/etc/cron.d/content-notifier"
+    content_notifier_logrotate_file: "/etc/logrotate.d/content-notifier"
+    content_notifier_log_file: "/var/log/content-notifier.log"
+
+    # Where to store backups on tresor
+    content_notifier_backup_dir: "/mnt/ssd/backups/content-notifier"
+
+    # Include current runtime log in backup
+    content_notifier_backup_include_log: true
+
+    # Optional: also fetch archive back to controller (your laptop)
+    content_notifier_backup_fetch_to_controller: false
+    content_notifier_backup_fetch_dir: "./artifacts/content-notifier-backups"
+
+    # Timestamped filename
+    content_notifier_backup_filename: >-
+      content-notifier-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.tar.gz
+    content_notifier_backup_path: "{{ content_notifier_backup_dir }}/{{ content_notifier_backup_filename }}"
+
+  tasks:
+    - name: Ensure backup dir exists on remote host
+      file:
+        path: "{{ content_notifier_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Build backup path list (without log)
+      set_fact:
+        _content_notifier_backup_paths:
+          - "{{ content_notifier_app_dir }}"
+          - "{{ content_notifier_config_dir }}"
+          - "{{ content_notifier_cron_file }}"
+          - "{{ content_notifier_logrotate_file }}"
+
+    - name: Add log file to backup path list (optional)
+      set_fact:
+        _content_notifier_backup_paths: "{{ _content_notifier_backup_paths + [content_notifier_log_file] }}"
+      when: content_notifier_backup_include_log | bool
+
+    - name: Stat backup paths
+      stat:
+        path: "{{ item }}"
+      loop: "{{ _content_notifier_backup_paths }}"
+      register: _content_notifier_backup_stats
+      changed_when: false
+
+    - name: Keep only existing paths
+      set_fact:
+        _content_notifier_backup_existing_paths: >-
+          {{
+            _content_notifier_backup_stats.results
+            | selectattr('stat.exists', 'defined')
+            | selectattr('stat.exists')
+            | map(attribute='item')
+            | list
+          }}
+
+    - name: Fail if nothing exists to back up
+      assert:
+        that:
+          - _content_notifier_backup_existing_paths | length > 0
+        fail_msg: "No content-notifier files found to back up."
+
+    - name: Create backup archive on remote host
+      archive:
+        path: "{{ _content_notifier_backup_existing_paths }}"
+        dest: "{{ content_notifier_backup_path }}"
+        format: gz
+        remove: false
+      register: _content_notifier_archive_result
+
+    - name: Show backup archive path
+      debug:
+        msg: "Created backup: {{ content_notifier_backup_path }}"
+
+    - name: Ensure local fetch dir exists (controller)
+      delegate_to: localhost
+      become: false
+      file:
+        path: "{{ content_notifier_backup_fetch_dir }}"
+        state: directory
+        mode: "0755"
+      when: content_notifier_backup_fetch_to_controller | bool
+
+    - name: Fetch backup archive to controller (optional)
+      fetch:
+        src: "{{ content_notifier_backup_path }}"
+        dest: "{{ content_notifier_backup_fetch_dir }}/"
+        flat: true
+      when: content_notifier_backup_fetch_to_controller | bool

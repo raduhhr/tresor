@@ -1,0 +1,205 @@
+---
+- name: Sanity - webhook must be set
+  ansible.builtin.assert:
+    that:
+      - content_notifier_webhook_url is string
+      - content_notifier_webhook_url | length > 0
+      - content_notifier_webhook_url is match('^https://discord\\.com/api/webhooks/.+')
+    fail_msg: >-
+      content_notifier_webhook_url is missing or invalid.
+      Pass it from vault (e.g. vault_content_notifier_webhook_url).
+
+- name: Sanity - monitored paths list must be defined
+  ansible.builtin.assert:
+    that:
+      - content_notifier_paths is iterable
+      - content_notifier_paths | length > 0
+    fail_msg: "content_notifier_paths must contain at least one {label, path} item."
+
+- name: Sanity - monitored path items must have label/path
+  ansible.builtin.assert:
+    that:
+      - item.label is defined
+      - item.path is defined
+      - item.label | string | length > 0
+      - item.path | string | length > 0
+  loop: "{{ content_notifier_paths }}"
+  loop_control:
+    label: "{{ item.label | default('?') }} -> {{ item.path | default('?') }}"
+
+- name: Install python packages (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name: "{{ content_notifier_python_packages }}"
+    state: present
+    update_cache: true
+  when: content_notifier_manage_packages | bool
+
+- name: Install ACL package (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name: "{{ content_notifier_acl_package_name }}"
+    state: present
+    update_cache: true
+  when:
+    - content_notifier_manage_acls | bool
+    - content_notifier_manage_acl_package | bool
+
+- name: Ensure app dir exists
+  ansible.builtin.file:
+    path: "{{ content_notifier_app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure config dir exists
+  ansible.builtin.file:
+    path: "{{ content_notifier_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ content_notifier_run_group }}"
+    mode: "0770"
+
+- name: Ensure state file exists
+  ansible.builtin.copy:
+    dest: "{{ content_notifier_state_file }}"
+    content: |
+      {
+        "version": 1,
+        "items": {}
+      }
+    owner: root
+    group: "{{ content_notifier_run_group }}"
+    mode: "0640"
+    force: false
+
+- name: Sanity - monitored roots must exist
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+  register: _content_notifier_root_stats
+  loop: "{{ content_notifier_paths }}"
+  loop_control:
+    label: "{{ item.label }} -> {{ item.path }}"
+
+- name: Fail if monitored root is missing
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+    fail_msg: "Monitored root missing or not a directory: {{ item.item.path }}"
+  loop: "{{ _content_notifier_root_stats.results }}"
+  loop_control:
+    label: "{{ item.item.label }} -> {{ item.item.path }}"
+
+# ----------------------------
+# ACL management (simple + practical)
+# ----------------------------
+
+- name: Check ACL tools present (setfacl/getfacl)
+  ansible.builtin.command: "bash -lc 'command -v setfacl && command -v getfacl'"
+  changed_when: false
+  when: content_notifier_manage_acls | bool
+
+# Cheap root ACL enforcement (safe every deploy; no recursion)
+- name: Apply root access ACL on monitored roots (read/execute for runtime user)
+  ansible.builtin.command: "setfacl -m u:{{ content_notifier_acl_user }}:rx {{ item.path }}"
+  changed_when: false
+  loop: "{{ content_notifier_paths }}"
+  loop_control:
+    label: "{{ item.label }} -> {{ item.path }}"
+  when:
+    - content_notifier_manage_acls | bool
+    - content_notifier_acl_enforce_root_access | bool
+
+- name: Apply root default ACL on monitored roots (future entries inherit ansible rx)
+  ansible.builtin.command: "setfacl -d -m u:{{ content_notifier_acl_user }}:rx {{ item.path }}"
+  changed_when: false
+  loop: "{{ content_notifier_paths }}"
+  loop_control:
+    label: "{{ item.label }} -> {{ item.path }}"
+  when:
+    - content_notifier_manage_acls | bool
+    - content_notifier_acl_enforce_root_default | bool
+
+# One-time recursive bootstrap (existing content tree)
+- name: Bootstrap recursive access ACL for existing media tree (one-time)
+  ansible.builtin.command: "setfacl -R -m u:{{ content_notifier_acl_user }}:rx {{ item.path }}"
+  changed_when: false
+  loop: "{{ content_notifier_paths }}"
+  loop_control:
+    label: "{{ item.label }} -> {{ item.path }}"
+  when:
+    - content_notifier_manage_acls | bool
+    - content_notifier_acl_bootstrap_recursive | bool
+
+- name: Bootstrap recursive default ACL for existing media tree (one-time)
+  ansible.builtin.command: "setfacl -R -d -m u:{{ content_notifier_acl_user }}:rx {{ item.path }}"
+  changed_when: false
+  loop: "{{ content_notifier_paths }}"
+  loop_control:
+    label: "{{ item.label }} -> {{ item.path }}"
+  when:
+    - content_notifier_manage_acls | bool
+    - content_notifier_acl_bootstrap_recursive | bool
+
+# ----------------------------
+# Runtime readability sanity check (AFTER ACL application)
+# ----------------------------
+
+- name: Sanity - runtime user must be able to list monitored roots (ACL/readability check)
+  become: true
+  become_user: "{{ content_notifier_run_user }}"
+  ansible.builtin.command: "ls -1 {{ item.path }}"
+  changed_when: false
+  register: _content_notifier_acl_check
+  failed_when: _content_notifier_acl_check.rc != 0
+  loop: "{{ content_notifier_paths }}"
+  loop_control:
+    label: "{{ item.label }} -> {{ item.path }}"
+
+- name: Install notifier script
+  ansible.builtin.copy:
+    src: "content_notifier.py"
+    dest: "{{ content_notifier_app_dir }}/content_notifier.py"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render env file (webhook + config)
+  ansible.builtin.template:
+    src: "content-notifier.env.j2"
+    dest: "{{ content_notifier_env_file }}"
+    owner: root
+    group: "{{ content_notifier_run_group }}"
+    mode: "0640"
+
+- name: Render wrapper script
+  ansible.builtin.template:
+    src: "content-notifier.sh.j2"
+    dest: "{{ content_notifier_app_dir }}/content-notifier.sh"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure log file exists
+  ansible.builtin.file:
+    path: "{{ content_notifier_log_file }}"
+    state: touch
+    owner: "{{ content_notifier_run_user }}"
+    group: "{{ content_notifier_run_group }}"
+    mode: "0640"
+
+- name: Install cron job
+  ansible.builtin.template:
+    src: "content-notifier.cron.j2"
+    dest: "/etc/cron.d/content-notifier"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install logrotate config
+  ansible.builtin.template:
+    src: "content-notifier.logrotate.j2"
+    dest: "/etc/logrotate.d/content-notifier"
+    owner: root
+    group: root
+    mode: "0644"

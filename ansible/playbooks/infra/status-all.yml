@@ -1,0 +1,80 @@
+---
+- name: "Tresor — Global container status (with running_for)"
+  hosts: tresor
+  become: true
+  gather_facts: true
+
+  vars:
+    # Leave empty to include ALL containers, or pass a subset at runtime:
+    # -e 'filter_names=["traefik","cloudflared","jellyfin","filebrowser"]'
+    filter_names: []
+
+  tasks:
+    - name: Get host uptime (pretty)
+      ansible.builtin.command: uptime -p
+      register: host_uptime_pretty
+      changed_when: false
+
+    - name: List all containers (JSON lines)
+      ansible.builtin.command: >
+        docker ps -a --format '{{"{{"}}json .{{"}}"}}'
+      register: docker_ps
+      changed_when: false
+
+    - name: Parse containers from docker ps
+      ansible.builtin.set_fact:
+        containers_list: "{{ docker_ps.stdout_lines | map('from_json') | list }}"
+
+    - name: Optionally filter containers by name
+      ansible.builtin.set_fact:
+        containers_effective: >-
+          {{
+            containers_list
+            if (filter_names | length == 0)
+            else (containers_list | selectattr('Names','in', filter_names) | list)
+          }}
+
+    - name: Gather deep info per container
+      community.docker.docker_container_info:
+        name: "{{ item.Names }}"
+      loop: "{{ containers_effective }}"
+      loop_control:
+        label: "{{ item.Names }}"
+      register: deep
+      changed_when: false
+
+    - name: Build status rows (simple and robust)
+      vars:
+        ci: "{{ item.container }}"
+        ps: "{{ item.item }}"
+      ansible.builtin.set_fact:
+        rows: "{{ (rows | default([])) + [ {
+          'name':        (ci.Name | default(ps.Names)),
+          'running':     (ci.State.Running | default(false)),
+          'status':      (ps.Status | default('unknown')),
+          'image':       (ps.Image | default('n/a')),
+          'ports':       (ps.Ports | default('')),
+          'started_at':  (ci.State.StartedAt | default('')),
+          'running_for': (ps.RunningFor | default(''))
+        } ] }}"
+      loop: "{{ deep.results }}"
+      loop_control:
+        label: "{{ ps.Names }}"
+
+    - name: Show structured status (JSON-friendly)
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          host_uptime_pretty: "{{ host_uptime_pretty.stdout | default('n/a') }}"
+          containers: "{{ rows | default([]) }}"
+      changed_when: false
+
+    - name: Friendly summary (one-liner)
+      vars:
+        total:   "{{ rows | default([]) | length }}"
+        running: "{{ rows | default([]) | selectattr('running','equalto',true)  | list | length }}"
+        stopped: "{{ rows | default([]) | selectattr('running','equalto',false) | list | length }}"
+      ansible.builtin.debug:
+        msg: "{{ total }} containers — {{ running }} running, {{ stopped }} stopped."
+      changed_when: false
+

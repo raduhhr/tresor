@@ -1,0 +1,4 @@
+---
+# roles/jellyfin/handlers/main.yml
+# No handlers — firewall management moved to roles/docker-firewall.
+# Add service-specific handlers here if needed (e.g. restart on config change).

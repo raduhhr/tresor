@@ -1,0 +1,31 @@
+---
+- name: Start Paper
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    paper_container: paper
+    paper_wg_ip: "{{ hostvars[inventory_hostname].wg_ip | default(hostvars[inventory_hostname].wg_bind_ip | default('10.66.66.2')) }}"
+    paper_port: 25565
+
+  tasks:
+    - name: Ensure Paper container is started
+      community.docker.docker_container:
+        name: "{{ paper_container }}"
+        state: started
+      register: _start
+
+    - name: Wait for Paper via WireGuard from VPS
+      ansible.builtin.wait_for:
+        host: "{{ paper_wg_ip }}"
+        port: "{{ paper_port }}"
+        timeout: 90
+      delegate_to: tresor-vps
+      run_once: true
+      when: _start.changed
+
+    - name: Show status after start
+      ansible.builtin.debug:
+        msg: "Paper started successfully"
+      when: _start.changed

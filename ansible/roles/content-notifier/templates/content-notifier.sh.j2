@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="{{ content_notifier_env_file }}"
+PY="{{ content_notifier_python_bin }}"
+APP="{{ content_notifier_app_dir }}/content_notifier.py"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "content-notifier: env file missing: $ENV_FILE" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+set -a
+source "$ENV_FILE"
+set +a
+
+exec "$PY" "$APP"

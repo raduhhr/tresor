@@ -1,0 +1,11 @@
+---
+- name: Start filebrowser-public
+  hosts: prod
+  gather_facts: false
+  tasks:
+    - name: Start filebrowser-public container
+      community.docker.docker_container:
+        name: filebrowser-public
+        state: started
+    - ansible.builtin.debug:
+        msg: "filebrowser-public started"

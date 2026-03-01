@@ -1,0 +1,23 @@
+[Unit]
+Description=Velocity Minecraft Proxy
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
+StartLimitIntervalSec=0
+
+[Service]
+User={{ velocity_user }}
+Group={{ velocity_group }}
+WorkingDirectory={{ velocity_home }}
+ExecStart=/usr/bin/java -Xms{{ velocity_min_memory }} -Xmx{{ velocity_max_memory }} \
+  -jar {{ velocity_jar }}
+Restart=always
+RestartSec=2
+Environment=TZ={{ velocity_tz }}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths={{ velocity_home }}
+
+[Install]
+WantedBy=multi-user.target

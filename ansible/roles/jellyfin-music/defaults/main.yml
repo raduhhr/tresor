@@ -1,0 +1,51 @@
+###############################
+# File: ./defaults/main.yml
+###############################
+---
+# Jellyfin Music (public via VPS reverse-proxy over WireGuard)
+# This instance is meant to be reached ONLY from the VPS over WG.
+# Clients hit VPS -> VPS proxies -> WG -> this Jellyfin.
+
+# Docker image
+
+# Container identity
+jellyfin_music_container_name: "jellyfin-music"
+
+# Docker network to attach to (doesn't matter much since we publish a host port,
+# but keeping it consistent with your internal service patterns)
+jellyfin_music_network: "internal_net"
+
+# Jellyfin internal port (inside container)
+jellyfin_music_container_port: 8096
+
+# Host bind address + port
+# IMPORTANT: bind to Tresor's WireGuard IP so it isn't reachable on LAN IPs.
+jellyfin_music_bind_addr: "10.66.66.2"
+jellyfin_music_listen_port: 18096
+
+
+# Data paths (host)
+# Config stays on SSD.
+jellyfin_music_config_dir: "/mnt/ssd/configs/jellyfin-music"
+
+# Your actual music location:
+
+# (If standardize to /mnt/data/media/music or similar, change this var.)
+# Media directories
+jellyfin_music_media_dir: /mnt/data/files/Music
+jellyfin_music_movies_dir: /mnt/data/files/Movies
+jellyfin_music_tvshows_dir: /mnt/data/files/TV-Shows
+
+# Linux permissions model (matches your docs: root:mediausers, 775/770)
+jellyfin_music_group_name: "mediausers"
+
+# Container user (override if you want)
+# Many people run Jellyfin as 1000:1000; your existing role does user mapping too.
+jellyfin_music_uid: 1000
+
+# Optional: VAAPI (no transcoding, so default false)
+jellyfin_music_enable_vaapi: false
+jellyfin_music_vaapi_device: "/dev/dri/renderD128"
+
+# Extra env if you want
+jellyfin_music_env: {}

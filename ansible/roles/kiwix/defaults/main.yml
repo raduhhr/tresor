@@ -1,0 +1,30 @@
+---
+# Source ZIM path (on the Ansible control machine = legion)
+kiwix_zim_src_path: "/mnt/samsung/PROJECTS/kiwix/wikipedia_en_all_maxi_2025-08.zim"
+
+# Destination path (on tresor SSD)
+kiwix_zim_dest_dir: "/mnt/ssd/services/kiwix"
+kiwix_zim_dest_path: "{{ kiwix_zim_dest_dir }}/{{ kiwix_zim_src_path | basename }}"
+
+# Ownership (ZIM destination dir)
+kiwix_uid: 1000
+kiwix_gid: 1000
+
+# Container
+kiwix_container_name: "kiwix"
+
+# LAN exposure (avoid your 8080/Filebrowser)
+kiwix_bind_addr: "192.168.1.100"
+kiwix_host_port: 8181
+kiwix_container_port: 8080
+
+# Networks (match your style)
+kiwix_networks:
+  - "internal_net"
+  - "lan_pub"
+
+
+# Copy behavior for 110+GB file
+kiwix_sync_enabled: true
+kiwix_sync_partial: true
+

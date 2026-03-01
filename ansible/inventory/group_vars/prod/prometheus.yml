@@ -1,0 +1,3 @@
+prometheus_expose_host_port: true
+prometheus_host_port: 9090
+prometheus_network: "internal_net"

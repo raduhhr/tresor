@@ -1,0 +1,14 @@
+---
+- name: Remove steam-free-notifier (cron + script)
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove cron job
+      ansible.builtin.file:
+        path: /etc/cron.d/steam-free-notifier
+        state: absent
+
+    - name: Remove app directory
+      ansible.builtin.file:
+        path: /opt/steam-free-notifier
+        state: absent

@@ -1,0 +1,36 @@
+
+# Images — must be set via group_vars/prod → tresor_versions.*
+prometheus_image: ""
+node_exporter_image: ""
+cadvisor_image: ""
+
+prometheus_container_name: "prometheus"
+prometheus_config_dir: "/mnt/ssd/configs/prometheus"
+prometheus_network: "internal_net"
+
+# Container port
+prometheus_port: 9090
+
+# NEW: LAN exposure toggle + host bind port
+prometheus_expose_host_port: true
+prometheus_host_port: 9090
+prometheus_bind_addr: "192.168.1.100"
+
+prometheus_scrape_interval: "15s"
+
+prometheus_targets:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["prometheus:9090"]
+
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]   # ← fixed (was localhost)
+
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: "minecraft"
+    static_configs:
+      - targets: ["{{ prometheus_minecraft_target | default('10.66.66.2:9225') }}"]

@@ -1,0 +1,11 @@
+---
+# Update Kiwix: backup current state → deploy new version → verify health
+# Prerequisite: bump the version in group_vars/prod/versions.yml first
+- name: "Update Kiwix — backup"
+  import_playbook: backup.yml
+
+- name: "Update Kiwix — deploy"
+  import_playbook: deploy.yml
+
+- name: "Update Kiwix — status"
+  import_playbook: status.yml

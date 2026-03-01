@@ -1,0 +1,23 @@
+# ============================
+# Minecraft (Paper) – Tresor
+# ============================
+
+# Where world data and configs live
+paper_data_dir: "/opt/minecraft/paper"
+
+# Network isolation (Docker)
+mc_net: "mc_net"
+
+# Paper runtime options (used by role)
+paper_memory: "4G"               # Total RAM allocation for Paper
+paper_whitelist: "TRUE"          # Enforce whitelist
+paper_apply_live: false          # Avoid live restarts on config template changes
+paper_online_mode: "FALSE"
+
+# Optional environment/locale context
+paper_timezone: "UTC"
+
+# Docker user mapping (matching UID:GID on host)
+paper_uid: 1000
+paper_gid: 1000
+

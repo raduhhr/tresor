@@ -1,0 +1,40 @@
+# playbooks/paper/restart.yml
+- name: Restart Paper container
+  hosts: tresor
+  gather_facts: false
+  become: true
+  vars:
+    paper_container: paper
+    paper_wg_ip: "{{ hostvars[inventory_hostname].wg_ip | default(hostvars[inventory_hostname].wg_bind_ip | default('10.66.66.2')) }}"
+    paper_port: 25565
+    logs_tail: 100
+  tasks:
+    - name: Check Paper container exists
+      community.docker.docker_container_info:
+        name: "{{ paper_container }}"
+      register: paper_info
+
+    - name: Restart Paper
+      community.docker.docker_container:
+        name: "{{ paper_container }}"
+        state: started
+        restart: true
+      when: paper_info.exists
+
+    # Probe from VPS (allowed by your firewall)
+    - name: Wait for Paper via WireGuard from VPS
+      ansible.builtin.wait_for:
+        host: "{{ paper_wg_ip }}"
+        port: "{{ paper_port }}"
+        timeout: 90
+      delegate_to: tresor-vps
+      run_once: true
+
+    - name: Tail recent logs
+      ansible.builtin.shell: "docker logs --tail {{ logs_tail }} {{ paper_container }}"
+      register: paper_logs
+      changed_when: false
+
+    - name: Show logs
+      ansible.builtin.debug:
+        msg: "{{ paper_logs.stdout }}"

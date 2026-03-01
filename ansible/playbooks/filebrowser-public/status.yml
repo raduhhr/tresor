@@ -1,0 +1,32 @@
+---
+- name: Status — filebrowser-public
+  hosts: prod
+  gather_facts: false
+  vars:
+    fb_port: "{{ filebrowser_public_listen_port | default(8082) }}"
+  tasks:
+    - name: Inspect filebrowser-public container
+      community.docker.docker_container_info:
+        name: filebrowser-public
+      register: _fbpub_info
+      failed_when: false
+
+    - name: Assert container exists
+      ansible.builtin.assert:
+        that: _fbpub_info.exists | default(false)
+        fail_msg: "filebrowser-public not found — has it been deployed?"
+
+    - name: Assert container is running/healthy
+      ansible.builtin.assert:
+        that: >-
+          (_fbpub_info.container.State.Health.Status | default('none')) == 'healthy'
+          or (_fbpub_info.container.State.Running | default(false))
+        fail_msg: "filebrowser-public is not healthy."
+
+    - ansible.builtin.debug:
+        msg:
+          - "Container : filebrowser-public"
+          - "State     : {{ _fbpub_info.container.State.Status | default('unknown') }}"
+          - "Health    : {{ _fbpub_info.container.State.Health.Status | default('n/a') }}"
+          - "Bound     : {{ filebrowser_public_bind_addr | default('10.66.66.2') }}:{{ fb_port }}"
+          - "Data root : {{ filebrowser_public_root_dir | default('/mnt/data/cloud') }}"

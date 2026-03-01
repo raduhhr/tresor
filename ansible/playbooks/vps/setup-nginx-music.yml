@@ -1,0 +1,31 @@
+---
+- name: VPS | nginx-music reverse proxy (Jellyfin Music over WireGuard)
+  hosts: vps
+  become: true
+  gather_facts: true
+
+  vars:
+    nginx_music_domain: "music.example.com"
+    nginx_music_upstream_host: "10.66.66.2"
+    nginx_music_upstream_port: 18096
+    nginx_music_enable_tls: true
+    nginx_music_acme_email: "{{ vault_acme_email }}"
+    nginx_music_manage_ufw: true
+
+  pre_tasks:
+    - name: Probe backend reachability over WireGuard (best-effort)
+      ansible.builtin.shell: "timeout 2 bash -lc 'exec 3<>/dev/tcp/{{ nginx_music_upstream_host }}/{{ nginx_music_upstream_port }} && echo ok || echo fail'"
+      args:
+        executable: /bin/bash
+      register: _probe
+      changed_when: false
+      failed_when: false
+
+    - name: Warn if backend unreachable (still continuing)
+      ansible.builtin.debug:
+        msg: "WARNING: backend {{ nginx_music_upstream_host }}:{{ nginx_music_upstream_port }} not reachable from VPS yet."
+      when: _probe.stdout is not search('ok')
+
+  roles:
+    - role: nginx-music
+

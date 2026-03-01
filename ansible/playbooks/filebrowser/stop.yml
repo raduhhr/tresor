@@ -1,0 +1,21 @@
+---
+- name: Stop FileBrowser
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: filebrowser
+
+  tasks:
+    - name: Stop FileBrowser container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+      register: _stop
+
+    - name: Show status after stop
+      ansible.builtin.debug:
+        msg: "FileBrowser stopped successfully"
+      when: _stop.changed
+

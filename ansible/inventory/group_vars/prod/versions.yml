@@ -1,0 +1,23 @@
+tresor_versions:
+  # Minecraft
+  minecraft_server_image: "itzg/minecraft-server:java21"
+  minecraft_server_version: "1.21.9"        
+
+  # Core apps
+  filebrowser_image: "filebrowser/filebrowser:v2.59.0"
+  grafana_image: "grafana/grafana:12.3.3"
+  jellyfin_image: "jellyfin/jellyfin:10.11.6"
+  jellyfin_music_image: "jellyfin/jellyfin:10.11.6"
+  kiwix_image: "ghcr.io/kiwix/kiwix-serve:3.8.1"
+  uptime_kuma_image: "louislam/uptime-kuma:1.23.17"
+
+  # Observability
+  prometheus_image: "prom/prometheus:v3.9.1"
+  node_exporter_image: "prom/node-exporter:v1.10.2"
+  # FIXME: cadvisor v0.47.2 is from 2023 — check https://github.com/google/cadvisor/releases for latest
+  cadvisor_image: "gcr.io/cadvisor/cadvisor:v0.47.2"
+
+  # Edge
+  traefik_image: "traefik:v3.1"
+  # FIXME: cloudflared 2024.8.2 is ~18 months old — check https://github.com/cloudflare/cloudflared/releases for latest
+  cloudflared_image: "cloudflare/cloudflared:2024.8.2"

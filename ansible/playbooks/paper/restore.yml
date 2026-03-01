@@ -1,0 +1,264 @@
+---
+# playbooks/paper/restore.yml
+#
+# Restore Paper from a backup snapshot.
+#
+# Usage:
+#   ansible-playbook playbooks/paper/restore.yml
+#     → picks the LATEST backup automatically
+#
+#   ansible-playbook playbooks/paper/restore.yml \
+#     -e backup_file=/mnt/data/files/Backups/paper/paper-backup-25022026-0300.tar.gz
+#     → restores a specific snapshot
+#
+# What happens:
+#   1. Validates backup tarball (exists, readable, contains paper/ dir)
+#   2. Takes a PRE-RESTORE safety snapshot (just in case)
+#   3. Stops & removes Paper container gracefully
+#   4. Wipes the data directory
+#   5. Extracts the backup
+#   6. Fixes ownership (uid/gid 1000)
+#   7. Redeploys via the paper role (re-templates configs, starts container)
+#   8. Verifies Paper is bound to WireGuard IP and reachable from VPS
+#
+# Safety:
+#   - The pre-restore snapshot lands in /mnt/data/files/Backups/paper/
+#     prefixed "pre-restore-" so you can always roll back if the restore goes sideways.
+#   - A confirmation prompt pauses before wiping data (override with -e confirm_restore=yes)
+
+########################################
+# Phase 1: Validate backup & pre-flight
+########################################
+- name: "Restore Paper — Phase 1: Validate backup"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/paper"
+    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_container: "paper"
+    confirm_restore: "no"
+
+  tasks:
+
+    # -- Resolve which backup to use --
+    - name: Find latest backup (when backup_file not specified)
+      ansible.builtin.shell: |
+        ls -1t {{ backup_dir }}/paper-backup-*.tar.gz 2>/dev/null | head -1
+      register: _latest
+      changed_when: false
+      when: backup_file is not defined
+
+    - name: Set backup path
+      ansible.builtin.set_fact:
+        _restore_file: "{{ backup_file | default(_latest.stdout | default('')) }}"
+
+    - name: Fail if no backup found
+      ansible.builtin.fail:
+        msg: >
+          No backup tarball found. Looked for:
+          {{ backup_file | default(backup_dir ~ '/paper-backup-*.tar.gz') }}
+      when: _restore_file | length == 0
+
+    # -- Validate the tarball --
+    - name: Stat the backup file
+      ansible.builtin.stat:
+        path: "{{ _restore_file }}"
+      register: _backup_stat
+
+    - name: Fail if backup file doesn't exist
+      ansible.builtin.fail:
+        msg: "Backup file not found: {{ _restore_file }}"
+      when: not _backup_stat.stat.exists
+
+    - name: Show backup file details
+      ansible.builtin.debug:
+        msg:
+          file: "{{ _restore_file }}"
+          size_mb: "{{ (_backup_stat.stat.size / 1048576) | round(1) }}"
+
+    - name: Verify tarball contains paper/ directory
+      ansible.builtin.shell: |
+        tar -tzf "{{ _restore_file }}" | head -20
+      register: _tar_list
+      changed_when: false
+
+    - name: Fail if tarball structure looks wrong
+      ansible.builtin.fail:
+        msg: >
+          Backup tarball doesn't contain expected paper/ directory structure.
+          First entries: {{ _tar_list.stdout_lines[:5] }}
+      when: >
+        _tar_list.stdout_lines | select('match', '^paper/') | list | length == 0
+
+    - name: Show tarball contents preview
+      ansible.builtin.debug:
+        msg: "{{ _tar_list.stdout_lines[:15] }}"
+
+    # -- Confirmation gate --
+    - name: "⚠️  CONFIRMATION: About to wipe {{ paper_data_dir }} and restore from backup"
+      ansible.builtin.pause:
+        prompt: |
+
+          ╔══════════════════════════════════════════════════════════╗
+          ║  PAPER RESTORE — POINT OF NO RETURN                     ║
+          ╠══════════════════════════════════════════════════════════╣
+          ║  Backup:  {{ _restore_file | basename }}
+          ║  Size:    {{ (_backup_stat.stat.size / 1048576) | round(1) }} MB
+          ║  Target:  {{ paper_data_dir }}
+          ║                                                          ║
+          ║  This will:                                              ║
+          ║    1. Take a pre-restore safety snapshot                 ║
+          ║    2. Stop & remove the Paper container                  ║
+          ║    3. WIPE {{ paper_data_dir }}
+          ║    4. Extract the backup                                 ║
+          ║    5. Redeploy Paper                                     ║
+          ╚══════════════════════════════════════════════════════════╝
+
+          Type 'yes' to proceed
+      register: _confirm
+      when: confirm_restore | lower != 'yes'
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Restore aborted by user."
+      when:
+        - confirm_restore | lower != 'yes'
+        - _confirm.user_input | default('') | lower != 'yes'
+
+    # -- Persist facts for next plays --
+    - name: Store restore file path for subsequent plays
+      ansible.builtin.set_fact:
+        _restore_file: "{{ _restore_file }}"
+        cacheable: true
+
+########################################
+# Phase 2: Safety snapshot + tear down
+########################################
+- name: "Restore Paper — Phase 2: Safety snapshot & teardown"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/paper"
+    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_container: "paper"
+
+  tasks:
+
+    - name: Check if Paper data dir exists (might be fresh host)
+      ansible.builtin.stat:
+        path: "{{ paper_data_dir }}"
+      register: _data_dir
+
+    - name: Create pre-restore safety snapshot
+      ansible.builtin.shell: |
+        DATE=$(date +%d%m%Y-%H%M)
+        tar -czf "{{ backup_dir }}/pre-restore-paper-backup-$DATE.tar.gz" \
+          -C /mnt/ssd/services paper
+        echo "{{ backup_dir }}/pre-restore-paper-backup-$DATE.tar.gz"
+      register: _safety_snap
+      when: _data_dir.stat.exists | default(false)
+
+    - name: Show safety snapshot location
+      ansible.builtin.debug:
+        msg: "Safety snapshot: {{ _safety_snap.stdout | default('skipped — no existing data') }}"
+
+    - name: Stop Paper container gracefully
+      community.docker.docker_container:
+        name: "{{ paper_container }}"
+        state: stopped
+        stop_timeout: 30
+      register: _stop
+      failed_when: false
+
+    - name: Remove Paper container
+      community.docker.docker_container:
+        name: "{{ paper_container }}"
+        state: absent
+        force_kill: true
+      failed_when: false
+
+    - name: Wipe Paper data directory
+      ansible.builtin.file:
+        path: "{{ paper_data_dir }}"
+        state: absent
+      when: _data_dir.stat.exists | default(false)
+
+    - name: Verify data dir is gone
+      ansible.builtin.stat:
+        path: "{{ paper_data_dir }}"
+      register: _wiped
+
+    - name: Confirm wipe succeeded
+      ansible.builtin.assert:
+        that: not _wiped.stat.exists
+        fail_msg: "Failed to wipe {{ paper_data_dir }} — aborting restore."
+
+########################################
+# Phase 3: Extract backup
+########################################
+- name: "Restore Paper — Phase 3: Extract backup"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_uid: 1000
+    paper_gid: 1000
+
+  tasks:
+
+    - name: Recreate parent directory
+      ansible.builtin.file:
+        path: /mnt/ssd/services
+        state: directory
+        mode: '0755'
+
+    - name: Extract backup tarball
+      ansible.builtin.shell: |
+        tar -xzf "{{ _restore_file }}" -C /mnt/ssd/services
+      register: _extract
+
+    - name: Verify paper directory was restored
+      ansible.builtin.stat:
+        path: "{{ paper_data_dir }}"
+      register: _restored_dir
+
+    - name: Fail if restore extraction failed
+      ansible.builtin.fail:
+        msg: "Extraction didn't produce {{ paper_data_dir }}. Check the tarball."
+      when: not _restored_dir.stat.exists
+
+    - name: Fix ownership recursively
+      ansible.builtin.file:
+        path: "{{ paper_data_dir }}"
+        state: directory
+        owner: "{{ paper_uid }}"
+        group: "{{ paper_gid }}"
+        recurse: true
+
+    - name: Show restored directory contents (top-level)
+      ansible.builtin.shell: |
+        ls -la {{ paper_data_dir }}/ | head -30
+      register: _ls
+      changed_when: false
+
+    - name: Restored contents
+      ansible.builtin.debug:
+        msg: "{{ _ls.stdout_lines }}"
+
+########################################
+# Phase 4: Redeploy Paper via role
+########################################
+- name: "Restore Paper — Phase 4: Redeploy"
+  import_playbook: deploy.yml
+
+########################################
+# Phase 5: Final verification
+########################################
+- name: "Restore Paper — Phase 5: Verify"
+  import_playbook: status.yml

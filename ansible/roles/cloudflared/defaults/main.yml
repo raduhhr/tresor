@@ -1,0 +1,23 @@
+---
+# defaults file for roles/cloudflared (token mode)
+# All config is passed via token; no config files or tunnel_id needed.
+
+cloudflared:
+  enabled: true
+  name: "cloudflared"
+  tz: "UTC"
+
+  # Docker network to attach to
+  network: "public_net"
+
+  # Prometheus metrics (bound to 127.0.0.1)
+  enable_metrics: true
+  metrics_port: 8086
+
+  # Prevent auto-updates from cloudflared itself (Ansible manages versions)
+  auto_update: false
+
+  log_driver: "journald"
+
+  # token: set in group_vars/prod/vault.yml as vault_cloudflared_token
+  # and referenced via cloudflared.token or vault_cloudflared_token

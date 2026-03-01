@@ -1,0 +1,11 @@
+---
+# roles/docker-firewall/defaults/main.yml
+
+tresor_services: {}
+
+# INPUT chain: additional allowed ports beyond SSH
+# Format: [{ port: 22, proto: tcp, src: "0.0.0.0/0", comment: "SSH" }]
+input_extra_rules: []
+
+# Set false to skip iptables-persistent install
+firewall_persist: true

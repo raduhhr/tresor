@@ -1,0 +1,25 @@
+---
+# QA overrides (must be a YAML mapping)
+# Ansible replaces dicts entirely — this dict must include ALL fields from all/main.yml
+# to avoid silently dropping tz, domain, config_dir, log_level.
+traefik:
+  bind_host: "127.0.0.1"
+  bind_port: 8080
+  tz: "UTC"
+  domain: "example.com"
+  config_dir: "/mnt/ssd/configs/traefik"
+  log_level: "INFO"
+traefik_dashboard_mode: "local"
+traefik_dashboard_local_port: 8081
+
+# Basic auth (optional but recommended even on local)
+traefik_basic_auth_users:
+  - "{{ vault_traefik_htpasswd_userline }}"
+
+# No tunnel in QA
+cloudflared:
+  enabled: false
+
+jellyfin_enable_vaapi: false
+jellyfin_create_media_dirs: true
+filebrowser_root_dir: "/mnt/data/files"

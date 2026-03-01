@@ -1,0 +1,20 @@
+---
+- name: Deploy Prometheus (metrics collector)
+  hosts: tresor
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Ensure Prometheus network exists
+      community.docker.docker_network:
+        name: "{{ prometheus_network }}"
+        state: present
+
+  roles:
+    - role: prometheus
+
+  post_tasks:
+    - name: Run verification tasks
+      ansible.builtin.include_role:
+        name: prometheus
+        tasks_from: verify

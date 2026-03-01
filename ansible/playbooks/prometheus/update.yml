@@ -1,0 +1,11 @@
+---
+# Update Prometheus: backup current state → deploy new version → verify health
+# Prerequisite: bump the version in group_vars/prod/versions.yml first
+- name: "Update Prometheus — backup"
+  import_playbook: backup.yml
+
+- name: "Update Prometheus — deploy"
+  import_playbook: deploy.yml
+
+- name: "Update Prometheus — status"
+  import_playbook: status.yml

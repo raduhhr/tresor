@@ -1,0 +1,17 @@
+# --- Base role defaults ---
+base_timezone: "UTC"
+base_locale: "en_US.UTF-8"
+base_ntp_servers: "0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org"
+
+ssh_port: 22
+ssh_allow_cidrs:
+  - "192.168.0.0/16"
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+
+base_forward_cidr: "192.168.0.0/24"
+base_forward_ports: [8080, 8096]
+
+# Optional lists
+base_groups: []
+base_dirs: []

@@ -1,0 +1,5 @@
+# Managed by Ansible: nginx-music role — cloud rate limiting zones
+# Loaded from /etc/nginx/conf.d/ to guarantee http{} context.
+# Referenced by /etc/nginx/sites-enabled/cloud.conf
+limit_req_zone  $binary_remote_addr zone=cloud_req:10m  rate={{ nginx_cloud_rate_limit }};
+limit_conn_zone $binary_remote_addr zone=cloud_conn:10m;

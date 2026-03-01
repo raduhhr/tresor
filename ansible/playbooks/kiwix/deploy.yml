@@ -1,0 +1,6 @@
+- name: Deploy Kiwix Wikipedia (LAN)
+  hosts: tresor
+  vars:
+    kiwix_sync_enabled: false  # Skip the file copy
+  roles:
+    - kiwix

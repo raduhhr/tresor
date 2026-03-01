@@ -1,0 +1,26 @@
+---
+- name: Ensure dependencies
+  apt:
+    name:
+      - python3-requests
+      - python3-bs4
+    state: present
+
+- name: Create app directory
+  file:
+    path: /opt/steam-free-notifier
+    state: directory
+    mode: "0755"
+
+- name: Deploy bot script
+  copy:
+    src: bot.py
+    dest: /opt/steam-free-notifier/bot.py
+    mode: "0755"
+
+- name: Install cron job
+  template:
+    src: steam-free-notifier.cron.j2
+    dest: /etc/cron.d/steam-free-notifier
+    mode: "0644"
+  notify: restart cron

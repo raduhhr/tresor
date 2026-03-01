@@ -1,0 +1,25 @@
+---
+- name: Remove bday-notifier (cron + script)
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove cron job
+      ansible.builtin.cron:
+        name: "bday-notifier"
+        state: absent
+        user: root
+
+    - name: Remove wrapper script
+      ansible.builtin.file:
+        path: /usr/local/bin/bday-notifier-run
+        state: absent
+
+    - name: Remove app directory
+      ansible.builtin.file:
+        path: /opt/bday-notifier
+        state: absent
+
+    - name: Remove env file
+      ansible.builtin.file:
+        path: /etc/bday-notifier.env
+        state: absent

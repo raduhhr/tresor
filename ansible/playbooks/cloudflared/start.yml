@@ -1,0 +1,21 @@
+---
+- name: Start cloudflared tunnel
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: cloudflared
+
+  tasks:
+    - name: Ensure cloudflared container is started
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: started
+      register: _start
+
+    - name: Show status after start
+      ansible.builtin.debug:
+        msg: "cloudflared started successfully"
+      when: _start.changed
+

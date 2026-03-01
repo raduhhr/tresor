@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+import os
+import json
+import yaml
+import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from pathlib import Path
+
+CONFIG = "{{ bday_notifier_cfg_path }}"
+STATE_DIR = "/mnt/ssd/configs/bday-notifier/state"
+SENT_FILE = f"{STATE_DIR}/sent.json"
+
+
+def load_cfg():
+    with open(CONFIG, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_sent():
+    Path(STATE_DIR).mkdir(parents=True, exist_ok=True)
+    if not os.path.exists(SENT_FILE):
+        return {}
+    try:
+        with open(SENT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        # If file gets corrupted, don't crash + spam — just ignore it.
+        # (Optionally: you could back it up and reset.)
+        return {}
+
+
+def save_sent(data: dict):
+    # atomic-ish write: write temp then replace
+    tmp = f"{SENT_FILE}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, SENT_FILE)
+
+
+def post_discord(url: str, msg: str):
+    r = requests.post(url, json={"content": msg}, timeout=10)
+    r.raise_for_status()
+
+
+def main():
+    cfg = load_cfg()
+
+    tz_name = cfg.get("timezone", "UTC")
+    tz = ZoneInfo(tz_name)
+    now = datetime.now(tz)
+
+    today_md = now.strftime("%m-%d")
+    today_key = now.strftime("%Y-%m-%d")
+
+    people = cfg.get("people", [])
+    envs = cfg.get("discord", {}).get("webhook_envs", [])
+
+    # Resolve webhook URLs from environment variables
+    webhooks = []
+    for e in envs:
+        val = os.getenv(e)
+        if val:
+            webhooks.append(val)
+
+    if not webhooks:
+        raise SystemExit("No Discord webhooks set in environment (env vars missing/empty).")
+
+    sent = load_sent()
+    already_sent_today = set(sent.get(today_key, [])) if isinstance(sent.get(today_key, []), list) else set()
+
+    sent_new = False
+
+    for p in people:
+        # be tolerant if an entry is malformed
+        if not isinstance(p, dict):
+            continue
+
+        name = p.get("name")
+        date = p.get("date")
+        if not name or not date:
+            continue
+
+        try:
+            birth_md = datetime.strptime(date, "%Y-%m-%d").strftime("%m-%d")
+        except ValueError:
+            # bad date format; skip silently (or log later if you want)
+            continue
+
+        if birth_md != today_md:
+            continue
+
+        if name in already_sent_today:
+            continue
+
+        # age only works if year is present; we assume YYYY-MM-DD
+        try:
+            age = now.year - int(date[:4])
+        except ValueError:
+            age = None
+
+        if age is None:
+            msg = f"🎂 **{name}** birthday today! 🎉"
+        else:
+            msg = f"🎂 **{name}** birthday today! turns **{age}** 🎉"
+
+        for wh in webhooks:
+            post_discord(wh, msg)
+
+        already_sent_today.add(name)
+        sent_new = True
+
+    # Only persist state if we actually sent something new this run
+    if sent_new:
+        sent[today_key] = sorted(already_sent_today)
+        save_sent(sent)
+
+
+if __name__ == "__main__":
+    main()

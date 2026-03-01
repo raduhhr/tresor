@@ -1,0 +1,21 @@
+---
+- name: Restart FileBrowser
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: filebrowser
+
+  tasks:
+    - name: Restart FileBrowser container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        restart: true
+      register: _restart
+
+    - name: Show status after restart
+      ansible.builtin.debug:
+        msg: "FileBrowser restarted successfully"
+      when: _restart.changed
+

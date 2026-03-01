@@ -1,0 +1,11 @@
+---
+# Update Traefik: backup current state → deploy new version → verify health
+# Prerequisite: bump the version in group_vars/prod/versions.yml first
+- name: "Update Traefik — backup"
+  import_playbook: backup.yml
+
+- name: "Update Traefik — deploy"
+  import_playbook: deploy.yml
+
+- name: "Update Traefik — status"
+  import_playbook: status.yml

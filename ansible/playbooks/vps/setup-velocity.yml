@@ -1,0 +1,62 @@
+---
+- name: VPS | Deploy Velocity (public) -> Paper over WireGuard
+  hosts: vps
+  become: true
+  gather_facts: true
+
+  vars:
+    velocity_host: "0.0.0.0"
+    velocity_port: 25565
+    paper_backend_host: "10.66.66.2"
+    paper_backend_port: 25565
+    velocity_tz: "UTC"
+    velocity_min_memory: "512M"
+    velocity_max_memory: "1500M"
+    velocity_forwarding_mode: "modern"
+    velocity_forwarding_secret: "{{ vault_velocity_forwarding_secret }}"
+    velocity_manage_firewall: true
+
+  pre_tasks:
+    - name: Assert forwarding secret present
+      ansible.builtin.assert:
+        that:
+          - (velocity_forwarding_mode != 'modern') or (vault_velocity_forwarding_secret is defined)
+        fail_msg: "velocity_forwarding_mode=modern requires vault_velocity_forwarding_secret."
+
+    - name: Probe Paper backend reachability
+      ansible.builtin.shell: "timeout 2 bash -lc 'exec 3<>/dev/tcp/{{ paper_backend_host }}/{{ paper_backend_port }} && echo ok || echo fail'"
+      args:
+        executable: /bin/bash
+      register: _backend_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Warn if backend unreachable
+      ansible.builtin.debug:
+        msg: "WARNING: Paper backend {{ paper_backend_host }}:{{ paper_backend_port }} not reachable from VPS yet."
+      when: _backend_probe.stdout is not search('ok')
+
+  roles:
+    - role: velocity
+
+  post_tasks:
+    - name: Wait for Velocity to fully start
+      ansible.builtin.wait_for:
+        port: "{{ velocity_port }}"
+        host: "{{ velocity_host }}"
+        timeout: 60
+        delay: 2
+
+    - name: Confirm Velocity is listening
+      ansible.builtin.command: "ss -H -lnpt 'sport = :{{ velocity_port }}'"
+      register: _ss
+      changed_when: false
+      failed_when: _ss.rc != 0 or ('LISTEN' not in _ss.stdout)
+
+    - name: Final summary
+      ansible.builtin.debug:
+        msg:
+          - "Velocity service      : velocity (systemd)"
+          - "Public bind           : {{ velocity_host }}:{{ velocity_port }}"
+          - "Backend (WireGuard)   : {{ paper_backend_host }}:{{ paper_backend_port }}"
+          - "Forwarding mode       : {{ velocity_forwarding_mode }}"

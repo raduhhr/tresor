@@ -1,0 +1,20 @@
+---
+- name: Stop Prometheus
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: prometheus
+
+  tasks:
+    - name: Stop Prometheus container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+      register: _stop
+
+    - name: Show status after stop
+      ansible.builtin.debug:
+        msg: "Prometheus stopped successfully"
+      when: _stop.changed

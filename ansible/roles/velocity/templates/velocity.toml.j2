@@ -1,0 +1,52 @@
+# Velocity main configuration (Ansible-managed)
+
+# Bind address
+bind = "{{ velocity_host }}:{{ velocity_port }}"
+
+# Display settings
+motd = "{{ velocity_motd }}"
+show-max-players = {{ velocity_player_limit }}
+
+# Performance
+compression-level = {{ velocity_compression_level }}
+compression-threshold = 256
+login-ratelimit = 3000
+
+# Security
+online-mode = false
+force-key-authentication = false
+prevent-client-proxy-connections = false
+
+# Forwarding — MUST be top-level, before any [section] header
+player-info-forwarding-mode = "{{ velocity_forwarding_mode | upper }}"
+{% if velocity_forwarding_mode == 'modern' %}
+forwarding-secret-file = "{{ velocity_home }}/forwarding.secret"
+{% endif %}
+
+[servers]
+# Backend Paper server via WireGuard
+{{ velocity_backend_name | default('paper') }} = "{{ paper_backend_host }}:{{ paper_backend_port }}"
+
+# Try order when players connect
+try = [
+  "{{ velocity_backend_name | default('paper') }}"
+]
+
+[forced-hosts]
+# Optional: route specific domains to specific servers
+# "mc.example.com" = "{{ velocity_backend_name | default('paper') }}"
+
+[advanced]
+tcp-fast-open = true
+bungee-plugin-message-channel = true
+show-ping-requests = {{ velocity_show_ping_requests | lower }}
+failover-on-unexpected-server-disconnect = true
+announce-proxy-commands = true
+log-command-executions = false
+log-player-connections = true
+
+[query]
+enabled = false
+port = 25577
+map = "Velocity"
+show-plugins = false

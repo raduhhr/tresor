@@ -1,0 +1,12 @@
+---
+- name: Stop Paper
+  hosts: tresor
+  become: true
+  gather_facts: false
+  vars:
+    paper_container: "paper"
+  tasks:
+    - community.docker.docker_container:
+        name: "{{ paper_container }}"
+        state: stopped
+        force_kill: true

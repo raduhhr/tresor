@@ -1,0 +1,11 @@
+---
+# Update Cloudflared: backup current state → deploy new version → verify health
+# Prerequisite: bump the version in group_vars/prod/versions.yml first
+- name: "Update Cloudflared — backup"
+  import_playbook: backup.yml
+
+- name: "Update Cloudflared — deploy"
+  import_playbook: deploy.yml
+
+- name: "Update Cloudflared — status"
+  import_playbook: status.yml

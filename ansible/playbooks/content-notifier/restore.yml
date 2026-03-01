@@ -1,0 +1,111 @@
+---
+# content-notifier uses a multi-path archive (absolute paths).
+# The backup includes: /opt/content-notifier, /mnt/ssd/configs/content-notifier,
+# /etc/cron.d/content-notifier, /etc/logrotate.d/content-notifier, /var/log/content-notifier.log
+# Deploy recreates cron/logrotate/scripts, so we mainly need the config/state data.
+
+- name: "Restore content-notifier — validate, wipe, extract, redeploy"
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/ssd/backups/content-notifier"
+    config_dir: "/mnt/ssd/configs/content-notifier"
+    app_dir: "/opt/content-notifier"
+    confirm_restore: "no"
+
+  tasks:
+
+    - name: Find latest backup
+      ansible.builtin.shell: |
+        ls -1t {{ backup_dir }}/content-notifier-*.tar.gz 2>/dev/null | head -1
+      register: _latest
+      changed_when: false
+      when: backup_file is not defined
+
+    - name: Set backup path
+      ansible.builtin.set_fact:
+        _restore_file: "{{ backup_file | default(_latest.stdout | default('')) }}"
+
+    - name: Fail if no backup found
+      ansible.builtin.fail:
+        msg: "No backup found in {{ backup_dir }}"
+      when: _restore_file | length == 0
+
+    - name: Stat the backup file
+      ansible.builtin.stat:
+        path: "{{ _restore_file }}"
+      register: _backup_stat
+
+    - name: Fail if backup file doesn't exist
+      ansible.builtin.fail:
+        msg: "Backup file not found: {{ _restore_file }}"
+      when: not _backup_stat.stat.exists
+
+    - name: List tarball contents
+      ansible.builtin.shell: |
+        tar -tzf "{{ _restore_file }}" | head -20
+      register: _tar_list
+      changed_when: false
+
+    - name: Show restore plan
+      ansible.builtin.debug:
+        msg:
+          backup: "{{ _restore_file | basename }}"
+          size_mb: "{{ (_backup_stat.stat.size / 1048576) | round(1) }}"
+          contents_preview: "{{ _tar_list.stdout_lines[:10] }}"
+
+    - name: "⚠️  Confirm restore"
+      ansible.builtin.pause:
+        prompt: |
+          Restoring content-notifier from {{ _restore_file | basename }}
+          This will wipe config/app dirs and redeploy. Type 'yes' to proceed
+      register: _confirm
+      when: confirm_restore | lower != 'yes'
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Restore aborted."
+      when:
+        - confirm_restore | lower != 'yes'
+        - _confirm.user_input | default('') | lower != 'yes'
+
+    - name: Check if config dir exists
+      ansible.builtin.stat:
+        path: "{{ config_dir }}"
+      register: _config_exists
+
+    - name: Pre-restore safety snapshot
+      ansible.builtin.shell: |
+        DATE=$(date +%d%m%Y-%H%M)
+        tar -czf "{{ backup_dir }}/pre-restore-content-notifier-$DATE.tar.gz" \
+          -C /mnt/ssd/configs content-notifier 2>/dev/null || true
+      when: _config_exists.stat.exists | default(false)
+
+    - name: Wipe config directory
+      ansible.builtin.file:
+        path: "{{ config_dir }}"
+        state: absent
+
+    - name: Wipe app directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: absent
+
+    - name: Extract backup (absolute paths)
+      ansible.builtin.shell: |
+        tar -xzf "{{ _restore_file }}" -C /
+
+    - name: Verify config directory was restored
+      ansible.builtin.stat:
+        path: "{{ config_dir }}"
+      register: _restored
+
+    - name: Warn if config dir not in backup
+      ansible.builtin.debug:
+        msg: "Config dir not found in backup — deploy will create fresh config."
+      when: not _restored.stat.exists | default(false)
+
+- name: "Restore content-notifier — redeploy"
+  import_playbook: deploy.yml

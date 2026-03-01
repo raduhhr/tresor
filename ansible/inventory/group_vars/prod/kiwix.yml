@@ -1,0 +1,13 @@
+---
+# Source (on legion / Ansible control machine)
+kiwix_zim_src_path: "/mnt/samsung/PROJECTS/kiwix/wikipedia_en_all_maxi_2025-08.zim"
+
+# Destination (on tresor SSD)
+kiwix_zim_dest_dir: "/mnt/ssd/services/kiwix"
+
+# Deploy + expose to LAN
+kiwix_host_port: 8181
+
+# Copy from legion -> tresor (rsync)
+kiwix_sync_enabled: true
+kiwix_sync_partial: true

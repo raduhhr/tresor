@@ -1,0 +1,8 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Run once per hour at minute 17 (offset to avoid API thundering herd on :00)
+17 * * * * root DISCORD_WEBHOOK='{{ steam_free_notifier_webhook }}' /usr/bin/python3 /opt/steam-free-notifier/bot.py >> /var/log/steam-free-notifier.log 2>&1
+
+# Rotate log weekly (keep it from growing forever)
+0 3 * * 0 root test -f /var/log/steam-free-notifier.log && mv /var/log/steam-free-notifier.log /var/log/steam-free-notifier.log.old

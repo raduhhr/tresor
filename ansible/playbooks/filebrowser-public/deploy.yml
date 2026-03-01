@@ -1,0 +1,96 @@
+---
+# Deploy filebrowser-public — friends 1TB drop at cloud.example.com
+#
+# Architecture:
+#   internet → cloud.example.com
+#   → tresor-vps: nginx (nginx-music role, cloud.conf vhost, LE cert)
+#   → WireGuard (10.66.66.1 → 10.66.66.2:8082)
+#   → filebrowser-public container
+#   → /mnt/data/cloud (rw, isolated from /mnt/data/files)
+#
+# After this playbook, add the VPS vhost:
+#   ansible-playbook -i inventory/hosts.ini playbooks/vps/setup-nginx-cloud.yml
+#
+# Pre-requisites:
+#   1. vault_filebrowser_public_admin_pass set in prod vault
+#   2. public_net exists (run infra/setup-networks.yml if not)
+#   3. WireGuard tunnel up on both ends
+
+- name: Deploy filebrowser-public (friends drop — WG-only, cloud.example.com)
+  hosts: prod
+  gather_facts: true
+  become: true
+
+  pre_tasks:
+    - name: Ensure public_net exists (idempotent)
+      community.docker.docker_network:
+        name: public_net
+        driver: bridge
+        internal: false
+        driver_options:
+          com.docker.network.bridge.name: br-public_net
+
+    - name: Create 1TB loopback file (sparse, instant)
+      community.general.filesize:
+        path: /mnt/data/cloud.img
+        size: 1TiB
+        sparse: true
+      become: true
+
+    - name: Check if loopback is already mounted
+      ansible.builtin.command: findmnt /mnt/data/cloud
+      register: _cloud_mounted
+      changed_when: false
+      failed_when: false
+      become: true
+
+    - name: Check if loopback image already has a filesystem
+      ansible.builtin.command: blkid /mnt/data/cloud.img
+      register: _blkid
+      changed_when: false
+      failed_when: false
+      become: true
+
+    - name: Format loopback file (ONLY if no filesystem detected — never re-format)
+      ansible.builtin.command: mkfs.ext4 -F /mnt/data/cloud.img
+      become: true
+      when:
+        - _cloud_mounted.rc != 0
+        - _blkid.rc != 0  # blkid exit 2 = no filesystem found
+
+    - name: Ensure mount point exists
+      ansible.builtin.file:
+        path: /mnt/data/cloud
+        state: directory
+        owner: 1000
+        group: 1000
+        mode: "0755"
+      become: true
+
+    - name: Mount loopback (idempotent + fstab)
+      ansible.posix.mount:
+        path: /mnt/data/cloud
+        src: /mnt/data/cloud.img
+        fstype: ext4
+        opts: loop,defaults
+        state: mounted
+      become: true
+
+    - name: Fix ownership after mount
+      ansible.builtin.file:
+        path: /mnt/data/cloud
+        owner: 1000
+        group: 1000
+        mode: "0755"
+      become: true
+
+    - name: Drop format marker
+      ansible.builtin.file:
+        path: /mnt/data/cloud/.ansible_formatted
+        state: touch
+        owner: 1000
+        group: 1000
+      become: true
+
+  roles:
+    - filebrowser-public

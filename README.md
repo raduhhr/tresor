@@ -247,9 +247,11 @@ A `backup-all.yml` infra playbook runs backups across all services sequentially.
 ## Status
 
 Fully deployed and continuously monitored.  
-All components provisioned through Ansible, containerized under Docker, and secured via Cloudflare Tunnel + WireGuard.  
+All components provisioned through Ansible, containerized under Docker, and secured via Cloudflare Tunnel + WireGuard.
 
-**status-all playbook output**  
+**status-all playbook output**
+
+```text
 Press any key to continue...
  infrastructure   status all
 

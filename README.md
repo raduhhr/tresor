@@ -77,7 +77,9 @@ Provides a terminal dashboard for running lifecycle actions (deploy, start, stop
 
 Built with Rich + Questionary + Paramiko for live SSH interaction.
 
-<img width="1148" height="1312" alt="image" src="https://github.com/user-attachments/assets/c393777b-5330-4b8e-b4f7-0ae98c615661" />
+<img width="1238" height="1648" alt="image" src="https://github.com/user-attachments/assets/328398f1-f89a-4a43-b52b-bc50bc2f6d42" />
+<img width="1274" height="562" alt="image" src="https://github.com/user-attachments/assets/92e58eb4-0145-4dc9-844c-7c5b67a562cd" />
+
 
 
 ---

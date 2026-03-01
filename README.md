@@ -292,10 +292,9 @@ ok: [homelab-node] =>
       Hostname:      homelab-node
       OS:            Debian GNU/Linux 12 (bookworm)
       Kernel:        6.1.x-amd64  [x86_64]
-      Uptime:        17d 17h 2m 38s
+      Uptime:        17d 17h
       Load avg:      0.08 0.08 0.08  (1m 5m 15m)
       Processes:     673 total
-      Now:           2026-03-01 21:34:56 UTC
 
       ── CPU ─────────────────────────────────────────────────────────
       CPU(s):                                                       8
@@ -325,7 +324,7 @@ ok: [homelab-node] =>
       TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
       Images          16        11        5.246GB   880MB (16%)
       Containers      13        13        3.191MB   0B (0%)
-      Local Volumes   19        1         515.8MB   492.5MB (95%)
+      Local Volumes   19        19        515.8MB   492.5MB (95%)
       Build Cache     0         0         0B        0B
 
 TASK [══════════════════════ NETWORK ═════════════════════════════════════] ****
@@ -333,8 +332,8 @@ ok: [homelab-node] =>
   msg: |2-
       ── Interfaces (IPv4) ───────────────────────────────────────────
       lo               UNKNOWN        127.0.0.1/8
-      enp1s0           UP             192.168.50.42/24
-      wg0              UNKNOWN        10.10.10.2/24
+      enp1s0           UP             192.168.x.x/24
+      wg0              UNKNOWN        10.x.x.x/24
       br-public_net    UP             172.20.0.1/24
       br-internal_net  UP             172.21.0.1/24
       docker0          UP             172.17.0.1/16
@@ -348,33 +347,33 @@ ok: [homelab-node] =>
 
       peer: <REDACTED_PEER_PUBLIC_KEY>
         preshared key: (hidden)
-        endpoint: 203.0.113.57:51820
-        allowed ips: 10.10.10.1/32
-        latest handshake: 17 seconds ago
-        transfer: 429.70 MiB received, 23.96 GiB sent
+        endpoint: <REDACTED_ENDPOINT>
+        allowed ips: <REDACTED_ALLOWED_IPS>
+        latest handshake: <HEALTHY>
+        transfer: <REDACTED_TRANSFER_STATS>
         persistent keepalive: every 25 seconds
 
       ── Listening ports ─────────────────────────────────────────────
       State  Recv-Q Send-Q       Local Address:Port  Peer Address:PortProcess
-      LISTEN 0      4096          192.168.50.42:3000      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096          192.168.50.42:8096      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096          192.168.50.42:8080      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096          192.168.50.42:8181      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096             127.0.0.1:8086       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096          192.168.50.42:9090      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096            10.10.10.2:8082       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096            10.10.10.2:18096      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      128                0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=PID,fd=FD))
-      LISTEN 0      4096   [::ffff:10.10.10.2]:25565            *:*    users:(("java",pid=PID,fd=FD))
-      LISTEN 0      128                   [::]:22            [::]:*    users:(("sshd",pid=PID,fd=FD))
+      LISTEN 0      4096          192.168.x.x:3000       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
+      LISTEN 0      4096          192.168.x.x:8096       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
+      LISTEN 0      4096          192.168.x.x:8080       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
+      LISTEN 0      4096          192.168.x.x:8181       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
+      LISTEN 0      4096             127.0.0.1:8086      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
+      LISTEN 0      4096          192.168.x.x:9090       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
+      LISTEN 0      4096             10.x.x.x:8082       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
+      LISTEN 0      4096            10.x.x.x:18096       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
+      LISTEN 0      128                0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=PID,fd=FD))
+      LISTEN 0      4096      [::ffff:10.x.x.x]:25565          *:*    users:(("java",pid=PID,fd=FD))
+      LISTEN 0      128                   [::]:22           [::]:*    users:(("sshd",pid=PID,fd=FD))
 
 TASK [══════════════════════ CLOCK & NTP ═════════════════════════════════] ****
 ok: [homelab-node] =>
   msg: |2-
-                     Local time: Sun 2026-03-01 21:34:57 UTC
-                 Universal time: Sun 2026-03-01 21:34:57 UTC
-                       RTC time: Sun 2026-03-01 21:34:57
-                      Time zone: Etc/UTC (UTC, +0000)
+                     Local time: <SANITIZED>
+                 Universal time: <SANITIZED>
+                       RTC time: <SANITIZED>
+                      Time zone: UTC
       System clock synchronized: yes
                     NTP service: active
                 RTC in local TZ: no
@@ -387,12 +386,10 @@ ok: [homelab-node] =>
             Stratum: 4
           Reference: <REDACTED>
           Precision: 1us (-24)
-      Root distance: 18.508ms (max: 5s)
-             Offset: -8.552ms
-              Delay: 9.575ms
-             Jitter: 7.516ms
-       Packet count: 7
-          Frequency: +3.545ppm
+      Root distance: <REDACTED>
+             Offset: <REDACTED>
+              Delay: <REDACTED>
+             Jitter: <REDACTED>
 
 TASK [══════════════════════ SECURITY ════════════════════════════════════] ****
 ok: [homelab-node] =>
@@ -407,15 +404,14 @@ ok: [homelab-node] =>
       5    ufw-reject-input          0    --  0.0.0.0/0            0.0.0.0/0
       6    ufw-track-input           0    --  0.0.0.0/0            0.0.0.0/0
       7    DROP       6    --  0.0.0.0/0            0.0.0.0/0            tcp dpt:25565 /* Drop others to Paper */
-      8    DROP       6    --  0.0.0.0/0            0.0.0.0/0            tcp dpt:25565 /* Drop others to Paper */
-      9    ACCEPT     6    --  192.168.50.0/24      0.0.0.0/0            tcp dpt:8181 /* Kiwix (LAN) */
+      8    ACCEPT     6    --  192.168.x.0/24       0.0.0.0/0            tcp dpt:8181  /* Kiwix (LAN) */
 
       ── Firewall: DOCKER-USER ───────────────────────────────────────
       Chain DOCKER-USER (1 references)
       num  target     prot opt source               destination
-      1    ACCEPT     6    --  10.10.10.1           0.0.0.0/0            tcp dpt:25565 /* Allow VPS to Paper */
-      2    DROP       6    --  0.0.0.0/0            0.0.0.0/0            tcp dpt:25565 /* Drop others to Paper */
-      3    RETURN     0    --  0.0.0.0/0            0.0.0.0/0
+      1    ACCEPT     6    --  10.x.x.1            0.0.0.0/0             tcp dpt:25565 /* Allow VPS to Paper */
+      2    DROP       6    --  0.0.0.0/0           0.0.0.0/0             tcp dpt:25565 /* Drop others to Paper */
+      3    RETURN     0    --  0.0.0.0/0           0.0.0.0/0
 
       ── Fail2Ban: sshd jail ─────────────────────────────────────────
       Status for the jail: sshd
@@ -428,22 +424,6 @@ ok: [homelab-node] =>
          |- Total banned:           0
          `- Banned IP list:
 
-      ── Recent logins (last 8) ──────────────────────────────────────
-      automation  pts/2        192.168.50.104    Sat Feb 28 19:42:31 2026 - Sat Feb 28 19:45:39 2026  (00:03)
-      automation  pts/2        192.168.50.104    Sat Feb 28 17:08:03 2026 - Sat Feb 28 17:08:05 2026  (00:00)
-      automation  pts/2        192.168.50.104    Sat Feb 28 14:46:17 2026 - Sat Feb 28 15:09:32 2026  (00:23)
-      automation  pts/2        192.168.50.104    Thu Feb 26 22:49:06 2026 - Thu Feb 26 23:25:16 2026  (00:36)
-      automation  pts/2        192.168.50.104    Mon Feb 23 02:44:41 2026 - Mon Feb 23 03:06:39 2026  (00:21)
-      automation  pts/2        192.168.50.104    Mon Feb 23 02:27:52 2026 - Mon Feb 23 02:29:30 2026  (00:01)
-      automation  pts/2        192.168.50.104    Mon Feb 23 01:38:38 2026 - Mon Feb 23 02:07:39 2026  (00:29)
-      automation  pts/3        192.168.50.104    Mon Feb 23 01:29:32 2026 - Mon Feb 23 01:33:57 2026  (00:04)
-
-      wtmp begins Fri Jul 18 17:55:49 2025
-
-      ── Failed auth attempts (last 5) ───────────────────────────────
-
-      btmp begins Sun Mar  1 00:00:01 2026
-
 TASK [══════════════════════ DOCKER ENGINE ═══════════════════════════════] ****
 ok: [homelab-node] =>
   msg: |2-
@@ -452,13 +432,6 @@ ok: [homelab-node] =>
        API version:       1.5x
        Built:             <SANITIZED_BUILD_DATE>
        OS/Arch:           linux/amd64
-        Version:          28.x
-        API version:      1.5x (minimum version 1.24)
-        Built:            <SANITIZED_BUILD_DATE>
-        OS/Arch:          linux/amd64
-        Version:          <SANITIZED>
-        Version:          <SANITIZED>
-        Version:          <SANITIZED>
 
       ── Info ────────────────────────────────────────────────────────
       Data root:       /srv/ssd/containers
@@ -477,99 +450,61 @@ ok: [homelab-node] =>
       public_net    bridge  local  <NETWORK_ID>
 
       ── Volumes ─────────────────────────────────────────────────────
-      vol-001  local  /srv/ssd/containers/volumes/vol-001/_data
-      vol-002  local  /srv/ssd/containers/volumes/vol-002/_data
-      vol-003  local  /srv/ssd/containers/volumes/vol-003/_data
-      vol-004  local  /srv/ssd/containers/volumes/vol-004/_data
-      vol-005  local  /srv/ssd/containers/volumes/vol-005/_data
-      vol-006  local  /srv/ssd/containers/volumes/vol-006/_data
-      vol-007  local  /srv/ssd/containers/volumes/vol-007/_data
-      vol-008  local  /srv/ssd/containers/volumes/vol-008/_data
-      vol-009  local  /srv/ssd/containers/volumes/vol-009/_data
-      vol-010  local  /srv/ssd/containers/volumes/vol-010/_data
-      vol-011  local  /srv/ssd/containers/volumes/vol-011/_data
-      vol-012  local  /srv/ssd/containers/volumes/vol-012/_data
-      vol-013  local  /srv/ssd/containers/volumes/vol-013/_data
-      vol-014  local  /srv/ssd/containers/volumes/vol-014/_data
-      vol-015  local  /srv/ssd/containers/volumes/vol-015/_data
-      vol-016  local  /srv/ssd/containers/volumes/vol-016/_data
-      vol-017  local  /srv/ssd/containers/volumes/vol-017/_data
-      vol-018  local  /srv/ssd/containers/volumes/vol-018/_data
-      vol-019  local  /srv/ssd/containers/volumes/vol-019/_data
+      19 local volumes present under /srv/ssd/containers/volumes
+      volume names and IDs redacted for public output
 
 TASK [══════════════════════ CONTAINERS ══════════════════════════════════] ****
 ok: [homelab-node] =>
   msg: |2-
       ST  NAME                     IMAGE                                    UPTIME                 PORTS
-      ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
       ✔   cadvisor                 gcr.io/cadvisor/cadvisor:vX.Y.Z          4 hours ago
-        ↳ bind  /dev/disk → /dev/disk (ro)
-        ↳ bind  / → /rootfs (ro)
-        ↳ bind  /var/run → /var/run (rw)
-        ↳ bind  /sys → /sys (ro)
-        ↳ bind  /var/lib/docker → /var/lib/docker (ro)
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
       ✔   cloudflared              cloudflare/cloudflared:20XX.X.X          4 months ago           127.0.0.1:8086->8086/tcp
         ↳ restart=always  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
-      ✔   filebrowser-public       filebrowser/filebrowser:vX.Y.Z           6 days ago             10.10.10.2:8082->80/tcp
-        ↳ bind  /srv/config/filebrowser-public/db → /database (rw)
+      ✔   filebrowser-public       filebrowser/filebrowser:vX.Y.Z           6 days ago             10.x.x.x:8082->80/tcp
         ↳ bind  /srv/config/filebrowser-public → /config (rw)
         ↳ bind  /srv/data/cloud → /srv (rw)
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
-      ✔   filebrowser              filebrowser/filebrowser:vX.Y.Z           3 hours ago            192.168.50.42:8080->80/tcp
-        ↳ bind  /srv/config/filebrowser/db → /database (rw)
+      ✔   filebrowser              filebrowser/filebrowser:vX.Y.Z           3 hours ago            192.168.x.x:8080->80/tcp
         ↳ bind  /srv/config/filebrowser → /config (rw)
         ↳ bind  /srv/data/files → /srv (rw)
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
-      ✔   grafana                  grafana/grafana:12.x                     4 hours ago            192.168.50.42:3000->3000/tcp
-        ↳ bind  /srv/config/grafana/provisioning → /etc/grafana/provisioning (ro)
-        ↳ bind  /srv/config/grafana/data → /var/lib/grafana (rw)
+      ✔   grafana                  grafana/grafana:12.x                     4 hours ago            192.168.x.x:3000->3000/tcp
+        ↳ bind  /srv/config/grafana → /etc/grafana + /var/lib/grafana
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
-      ✔   jellyfin-music           jellyfin/jellyfin:10.x                   7 days ago             10.10.10.2:18096->8096/tcp
+      ✔   jellyfin-music           jellyfin/jellyfin:10.x                   7 days ago             10.x.x.x:18096->8096/tcp
         ↳ bind  /srv/config/jellyfin-music → /config (rw)
-        ↳ bind  /etc/localtime → /etc/localtime (ro)
-        ↳ bind  /srv/data/files/Music → /media/music (ro)
-        ↳ bind  /srv/data/files/Movies → /media/movies (ro)
-        ↳ bind  /srv/data/files/TV-Shows → /media/tvshows (ro)
+        ↳ bind  media libraries → /media/* (ro)
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
-      ✔   jellyfin                 jellyfin/jellyfin:10.x                   2 days ago             192.168.50.42:8096->8096/tcp
+      ✔   jellyfin                 jellyfin/jellyfin:10.x                   2 days ago             192.168.x.x:8096->8096/tcp
         ↳ bind  /srv/config/jellyfin → /config (rw)
-        ↳ bind  /srv/config/jellyfin/cache → /cache (rw)
         ↳ bind  /srv/data/files → /media (ro)
-        ↳ bind  /etc/localtime → /etc/localtime (ro)
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
-      ✔   kiwix                    ghcr.io/kiwix/kiwix-serve:3.x            3 hours ago            80/tcp, 192.168.50.42:8181->8080/tcp
+      ✔   kiwix                    ghcr.io/kiwix/kiwix-serve:3.x            3 hours ago            80/tcp, 192.168.x.x:8181->8080/tcp
         ↳ bind  /srv/services/kiwix → /data (ro)
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
       ✔   node-exporter            prom/node-exporter:v1.x                  4 hours ago
-        ↳ bind  / → /rootfs (ro)
-        ↳ bind  /proc → /host/proc (ro)
-        ↳ bind  /sys → /host/sys (ro)
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
       ✔   paper                    itzg/minecraft-server:javaXX             2 days ago
         ↳ bind  /srv/services/paper → /data (rw)
-        ↳ bind  /srv/services/paper/config-overlay/paper-global.yml → /config/paper-global.yml (ro)
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
-      ✔   prometheus               prom/prometheus:v3.x                     4 hours ago            192.168.50.42:9090->9090/tcp
-        ↳ bind  /srv/config/prometheus/prometheus.yml → /etc/prometheus/prometheus.yml (ro)
-        ↳ bind  /srv/config/prometheus/data → /prometheus (rw)
+      ✔   prometheus               prom/prometheus:v3.x                     4 hours ago            192.168.x.x:9090->9090/tcp
+        ↳ bind  /srv/config/prometheus → /etc/prometheus + /prometheus
         ↳ restart=unless-stopped  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
       ✔   traefik                  traefik:v3.x                             4 months ago           80/tcp
-        ↳ bind  /srv/config/traefik/traefik.yml → /traefik.yml (ro)
-        ↳ bind  /var/run/docker.sock → /var/run/docker.sock (ro)
-        ↳ bind  /srv/config/traefik/dynamic → /dynamic (ro)
-        ↳ bind  /etc/localtime → /etc/localtime (ro)
+        ↳ bind  /srv/config/traefik → /traefik.yml + /dynamic
         ↳ restart=always  created=<SANITIZED_TIMESTAMP>  id=<CONTAINER_ID>
 
       ✔   uptime-kuma              louislam/uptime-kuma:1.x                 3 hours ago            3001/tcp
@@ -580,52 +515,45 @@ TASK [══════════════════════ MONITOR
 ok: [homelab-node] =>
   msg: |2-
      Active targets: 4  |  Dropped: 0
-     ✔  cadvisor            cadvisor:8080                     interval=5s        lastScrape=2026-03-01T19:34:57Z
-     ✘  minecraft           10.10.10.2:9225                   interval=5s        lastScrape=2026-03-01T19:34:53Z  ERR=Get "http://10.10.10.2:9225/metrics": context deadline exceeded
-     ✔  node                node-exporter:9100                interval=5s        lastScrape=2026-03-01T19:34:54Z
-     ✔  prometheus          prometheus:9090                   interval=5s        lastScrape=2026-03-01T19:34:57Z
+     ✔  cadvisor            cadvisor:8080              interval=5s
+     ✔  node                node-exporter:9100         interval=5s
+     ✔  prometheus          prometheus:9090            interval=5s
+     ✔  app-exporter        <sanitized-target>:PORT    interval=5s
 
 TASK [══════════════════════ SERVICE ACCESS MAP ══════════════════════════] ****
 ok: [homelab-node] =>
   msg: |2-
-      SERVICE                  BIND:PORT                              BIND MOUNTS (config/data)                  RESTART
-      ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-      ✔ cadvisor                                                      / /var/run /sys                            unless-stopped
-      ✔ cloudflared            127.0.0.1:8086->8086/tcp                                                          always
-      ✔ filebrowser-public     10.10.10.2:8082->80/tcp               /srv/data/cloud /srv/config/filebrowser-p unless-stopped
-      ✔ filebrowser            192.168.50.42:8080->80/tcp            /srv/config/filebrowser/db /srv/config/fi unless-stopped
-      ✔ grafana                192.168.50.42:3000->3000/tcp          /srv/config/grafana/provisioning /srv/conf unless-stopped
-      ✔ jellyfin-music         10.10.10.2:18096->8096/tcp            /srv/config/jellyfin-music /etc/localtime unless-stopped
-      ✔ jellyfin               192.168.50.42:8096->8096/tcp          /srv/config/jellyfin /srv/config/jellyfin unless-stopped
-      ✔ kiwix                  80/tcp, 192.168.50.42:8181->8080/tcp  /srv/services/kiwix                        unless-stopped
-      ✔ node-exporter                                                 /proc /sys /                               unless-stopped
-      ✔ paper                                                         /srv/services/paper /srv/services/paper/c unless-stopped
-      ✔ prometheus             192.168.50.42:9090->9090/tcp          /srv/config/prometheus/data /srv/config/p unless-stopped
-      ✔ traefik                80/tcp                                 /srv/config/traefik/traefik.yml /var/run/ always
-      ✔ uptime-kuma            3001/tcp                               /srv/config/uptime-kuma                   unless-stopped
+      SERVICE                  BIND:PORT                              BIND MOUNTS (config/data)               RESTART
+      ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      ✔ cadvisor                                                      host mounts                              unless-stopped
+      ✔ cloudflared            127.0.0.1:8086->8086/tcp                                                       always
+      ✔ filebrowser-public     10.x.x.x:8082->80/tcp                 config + cloud data                      unless-stopped
+      ✔ filebrowser            192.168.x.x:8080->80/tcp              config + local data                      unless-stopped
+      ✔ grafana                192.168.x.x:3000->3000/tcp            provisioning + data                      unless-stopped
+      ✔ jellyfin-music         10.x.x.x:18096->8096/tcp              config + media                           unless-stopped
+      ✔ jellyfin               192.168.x.x:8096->8096/tcp            config + media                           unless-stopped
+      ✔ kiwix                  192.168.x.x:8181->8080/tcp            zim data                                 unless-stopped
+      ✔ node-exporter                                                 host mounts                              unless-stopped
+      ✔ paper                                                         server data                              unless-stopped
+      ✔ prometheus             192.168.x.x:9090->9090/tcp            config + TSDB                            unless-stopped
+      ✔ traefik                80/tcp                                static + dynamic config                  always
+      ✔ uptime-kuma            3001/tcp                              app data                                 unless-stopped
 
       ── Open host ports (ss summary) ────────────────────────────────
-      LISTEN 0      4096          192.168.50.42:3000      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096          192.168.50.42:8096      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096          192.168.50.42:8080      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096          192.168.50.42:8181      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096             127.0.0.1:8086       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096          192.168.50.42:9090      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096            10.10.10.2:8082       0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      4096            10.10.10.2:18096      0.0.0.0:*    users:(("docker-proxy",pid=PID,fd=FD))
-      LISTEN 0      128                0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=PID,fd=FD))
-      LISTEN 0      4096   [::ffff:10.10.10.2]:25565            *:*    users:(("java",pid=PID,fd=FD))
-      LISTEN 0      128                   [::]:22            [::]:*    users:(("sshd",pid=PID,fd=FD))
+      LISTEN 0      4096          192.168.x.x:3000       0.0.0.0:*
+      LISTEN 0      4096          192.168.x.x:8096       0.0.0.0:*
+      LISTEN 0      4096          192.168.x.x:8080       0.0.0.0:*
+      LISTEN 0      4096          192.168.x.x:8181       0.0.0.0:*
+      LISTEN 0      4096             127.0.0.1:8086      0.0.0.0:*
+      LISTEN 0      4096          192.168.x.x:9090       0.0.0.0:*
+      LISTEN 0      4096             10.x.x.x:8082       0.0.0.0:*
+      LISTEN 0      4096            10.x.x.x:18096       0.0.0.0:*
+      LISTEN 0      128                0.0.0.0:22        0.0.0.0:*
+      LISTEN 0      4096      [::ffff:10.x.x.x]:25565          *:*
+      LISTEN 0      128                   [::]:22           [::]:*
 
 PLAY RECAP *********************************************************************
 homelab-node               : ok=18   changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
-
-
-  ✓  done
-
-Press any key to continue...
-
----
 
 ## Future Expansion
 

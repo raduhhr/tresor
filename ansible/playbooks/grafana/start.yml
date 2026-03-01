@@ -1,0 +1,20 @@
+---
+- name: Start Grafana
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: grafana
+
+  tasks:
+    - name: Ensure Grafana container is started
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: started
+      register: _start
+
+    - name: Show status after start
+      ansible.builtin.debug:
+        msg: "Grafana started successfully"
+      when: _start.changed

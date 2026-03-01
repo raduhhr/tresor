@@ -1,0 +1,10 @@
+---
+- name: Remove kiwix container
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove kiwix container
+      community.docker.docker_container:
+        name: kiwix
+        state: absent
+        force_kill: true

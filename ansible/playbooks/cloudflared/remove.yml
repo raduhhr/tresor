@@ -1,0 +1,11 @@
+---
+- name: Remove cloudflared container
+  hosts: prod
+  become: true
+
+  tasks:
+    - name: Remove cloudflared container
+      community.docker.docker_container:
+        name: cloudflared
+        state: absent
+        force_kill: true

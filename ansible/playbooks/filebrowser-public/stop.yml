@@ -1,0 +1,11 @@
+---
+- name: Stop filebrowser-public
+  hosts: prod
+  gather_facts: false
+  tasks:
+    - name: Stop filebrowser-public container
+      community.docker.docker_container:
+        name: filebrowser-public
+        state: stopped
+    - ansible.builtin.debug:
+        msg: "filebrowser-public stopped"

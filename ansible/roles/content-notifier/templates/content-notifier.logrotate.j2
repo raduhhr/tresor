@@ -1,0 +1,9 @@
+{{ content_notifier_log_file }} {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    copytruncate
+    su {{ content_notifier_run_user }} {{ content_notifier_run_group }}
+}

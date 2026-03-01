@@ -1,0 +1,4 @@
+[servers]
+{{ velocity_backend_name | default('paper') }} = "{{ paper_backend_host }}:{{ paper_backend_port }}"
+
+try = [ "{{ velocity_backend_name | default('paper') }}" ]

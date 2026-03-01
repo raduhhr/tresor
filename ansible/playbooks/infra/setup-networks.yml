@@ -1,0 +1,7 @@
+---
+- name: Create core Docker networks
+  hosts: tresor
+  become: true
+  roles:
+    - networks
+

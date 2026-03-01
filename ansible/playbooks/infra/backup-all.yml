@@ -1,0 +1,17 @@
+---
+# Runs all service backups in sequence.
+# Stop/start cycles are handled inside each individual playbook.
+- import_playbook: ../bday-notifier/backup.yml
+- import_playbook: ../cloudflared/backup.yml
+- import_playbook: ../filebrowser/backup.yml
+- import_playbook: ../filebrowser-public/backup.yml
+- import_playbook: ../grafana/backup.yml
+- import_playbook: ../jellyfin/backup.yml
+- import_playbook: ../jellyfin-music/backup.yml
+- import_playbook: ../paper/backup.yml
+- import_playbook: ../prometheus/backup.yml
+- import_playbook: ../traefik/backup.yml
+- import_playbook: ../uptime-kuma/backup.yml
+- import_playbook: ../kiwix/backup.yml
+- import_playbook: ../content-notifier/backup.yml
+- import_playbook: ../steam-free-notifier/backup.yml

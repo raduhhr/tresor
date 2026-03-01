@@ -1,0 +1,159 @@
+---
+# Initial hardening and essentials for the VPS node
+- name: VPS | Base system setup (Debian)
+  hosts: vps
+  become: true
+  gather_facts: true
+
+  vars:
+    timezone: "UTC"
+    enable_fail2ban: true
+    ssh_port: 22
+    ufw_tcp_allow: [22]        # SSH
+    ufw_udp_allow: [51820]     # WireGuard
+    apt_upgrade: true
+    unattended_reboot: true
+
+  pre_tasks:
+    - name: Refresh apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Apply full upgrade (optional)
+      ansible.builtin.apt:
+        upgrade: dist
+      when: apt_upgrade | bool
+
+  tasks:
+    ####################################################################
+    # 1. Core packages
+    ####################################################################
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - vim
+          - curl
+          - wget
+          - git
+          - htop
+          - net-tools
+          - lsb-release
+          - ca-certificates
+          - ufw
+          - fail2ban
+          - unattended-upgrades
+        state: present
+        update_cache: false
+
+    ####################################################################
+    # 2. Timezone and locale
+    ####################################################################
+    - name: Set timezone
+      community.general.timezone:
+        name: "{{ timezone }}"
+
+    ####################################################################
+    # 3. SSH hardening
+    ####################################################################
+    - name: Disable root SSH login & password auth
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        backup: yes
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+      notify: restart ssh
+
+    - name: Ensure SSH uses custom port ({{ ssh_port }})
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?Port'
+        line: "Port {{ ssh_port }}"
+        state: present
+      notify: restart ssh
+
+    ####################################################################
+    # 4. UFW firewall
+    ####################################################################
+    - name: Reset UFW on first setup
+      community.general.ufw:
+        state: reset
+      when: ufw_reset | default(true) | bool
+
+    - name: Set default policies
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+    - community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Allow SSH (rate-limited)
+      community.general.ufw:
+        rule: limit
+        name: OpenSSH
+
+    - name: Allow TCP ports
+      community.general.ufw:
+        rule: allow
+        proto: tcp
+        to_port: "{{ item }}"
+      loop: "{{ ufw_tcp_allow | unique }}"
+
+    - name: Allow UDP ports
+      community.general.ufw:
+        rule: allow
+        proto: udp
+        to_port: "{{ item }}"
+      loop: "{{ ufw_udp_allow | unique }}"
+
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+
+    - name: Show UFW status
+      ansible.builtin.command: ufw status verbose
+      register: _ufw
+      changed_when: false
+
+    ####################################################################
+    # 5. Fail2Ban (optional)
+    ####################################################################
+    - name: Ensure Fail2Ban service state
+      ansible.builtin.systemd:
+        name: fail2ban
+        enabled: "{{ enable_fail2ban | bool }}"
+        state: "{{ enable_fail2ban | ternary('started','stopped') }}"
+
+    ####################################################################
+    # 6. Unattended upgrades
+    ####################################################################
+    - name: Enable automatic security upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          Unattended-Upgrade::Automatic-Reboot "{{ unattended_reboot | ternary('true','false') }}";
+        owner: root
+        group: root
+        mode: "0644"
+
+  handlers:
+    - name: restart ssh
+      ansible.builtin.systemd:
+        name: ssh
+        state: restarted
+
+  post_tasks:
+    - name: Print summary
+      ansible.builtin.debug:
+        msg:
+          - "UFW: active (TCP {{ ufw_tcp_allow | join(', ') }}, UDP {{ ufw_udp_allow | join(', ') }})"
+          - "Fail2Ban: {{ enable_fail2ban | ternary('enabled','disabled') }}"
+          - "Timezone: {{ timezone }}"
+          - "SSH: port {{ ssh_port }}, root login disabled"

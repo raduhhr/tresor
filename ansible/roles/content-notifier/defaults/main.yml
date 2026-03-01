@@ -1,0 +1,75 @@
+---
+# Runtime identity (recommended with ACL-read access on media dirs)
+# RISK: running as the ansible user means a script compromise grants full sudo.
+# Recommended fix: create a dedicated low-privilege user (no sudo, no shell) and
+# set content_notifier_run_user/group to that user before running in production.
+content_notifier_run_user: "ansible"
+content_notifier_run_group: "ansible"
+
+# ACL mgmt  
+content_notifier_manage_acls: true
+content_notifier_acl_user: "{{ content_notifier_run_user }}"
+
+content_notifier_acl_enforce_root_access: true
+content_notifier_acl_enforce_root_default: true
+content_notifier_acl_bootstrap_recursive: false #!!!FIRST-RUN only
+content_notifier_acl_package_name: "acl"
+content_notifier_manage_acl_package: true 
+
+# App / config / state / logs
+content_notifier_app_dir: "/opt/content-notifier"
+content_notifier_config_dir: "/mnt/ssd/configs/content-notifier"
+content_notifier_state_file: "{{ content_notifier_config_dir }}/state.json"
+content_notifier_env_file: "{{ content_notifier_config_dir }}/content-notifier.env"
+content_notifier_log_file: "/var/log/content-notifier.log"
+
+# Cron schedule (every 5 minutes by default)
+content_notifier_cron_minute: "*/5"
+
+# Python executable
+content_notifier_python_bin: "/usr/bin/python3"
+
+# Discord webhook (override from vault via playbook)
+content_notifier_webhook_url: ""
+
+# Behavior
+content_notifier_min_age_seconds: 180          # settle/debounce for newly created folders
+content_notifier_request_timeout_seconds: 10
+content_notifier_max_message_len: 1900         # leave room under Discord limits
+content_notifier_debug: false
+
+# Notification text customization
+content_notifier_message_prefix: "New content added"
+
+# Ignore rules
+content_notifier_ignore_hidden: true
+content_notifier_ignore_names:
+  - "@eaDir"
+  - "lost+found"
+  - ".stfolder"
+  - ".grab"
+  - ".Trash-1000"
+  - ".Trash"
+  - "RECYCLE.BIN"
+  - "$RECYCLE.BIN"
+
+# Ignore directories containing these fragments (case-insensitive)
+content_notifier_ignore_name_contains:
+  - "sample"
+  - "trailer"
+  - "tmp"
+  - "partial"
+  - "incomplete"
+
+# Monitored roots (top-level folders only)
+content_notifier_paths:
+  - label: "Movies"
+    path: "/mnt/data/files/Movies"
+  - label: "TV-Shows"
+    path: "/mnt/data/files/TV-Shows"
+
+# Optional: package install (Debian/Ubuntu)
+content_notifier_manage_packages: true
+content_notifier_python_packages:
+  - python3
+  - python3-requests

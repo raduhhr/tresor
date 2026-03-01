@@ -1,0 +1,10 @@
+---
+- name: Remove jellyfin-music container
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove jellyfin-music container
+      community.docker.docker_container:
+        name: jellyfin-music
+        state: absent
+        force_kill: true

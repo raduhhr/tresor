@@ -1,0 +1,21 @@
+---
+- name: Restart Traefik
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: traefik
+
+  tasks:
+    - name: Restart Traefik container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        restart: true
+      register: _restart
+
+    - name: Show status after restart
+      ansible.builtin.debug:
+        msg: "Traefik restarted successfully"
+      when: _restart.changed
+

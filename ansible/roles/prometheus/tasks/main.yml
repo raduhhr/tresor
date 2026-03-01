@@ -1,0 +1,170 @@
+---
+# =====================================================
+# Prometheus + Exporters (Bridge Mode - LAN-locked)
+# =====================================================
+
+# =====================================================
+# 0️⃣ Precheck: Ensure network exists
+# =====================================================
+- name: Ensure Prometheus network exists
+  community.docker.docker_network:
+    name: "{{ prometheus_network }}"
+    state: present
+  when: prometheus_expose_host_port | default(true) | bool
+
+# =====================================================
+# 1️⃣ Node Exporter – host metrics (internal only)
+# =====================================================
+- name: Run Node Exporter container
+  community.docker.docker_container:
+    name: node-exporter
+    image: "{{ node_exporter_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ prometheus_network }}"
+    # No published_ports — Prometheus scrapes via internal_net
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    user: "65534:65534"
+    read_only: true
+    state: started
+
+# =====================================================
+# 2️⃣ cAdvisor – container metrics (internal only)
+# =====================================================
+- name: Run cAdvisor container
+  community.docker.docker_container:
+    name: cadvisor
+    image: "{{ cadvisor_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    privileged: true  # required: cAdvisor needs host cgroup/proc/disk access (accepted risk)
+    networks:
+      - name: "{{ prometheus_network }}"
+    # No published_ports — Prometheus scrapes via internal_net
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    command:
+      - "--housekeeping_interval=10s"
+      - "--docker_only=true"
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    state: started
+
+# =====================================================
+# 3️⃣ Prometheus main service (LAN-locked)
+# =====================================================
+- name: Ensure Prometheus config directory exists
+  ansible.builtin.file:
+    path: "{{ prometheus_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure Prometheus data directory exists
+  ansible.builtin.file:
+    path: "{{ prometheus_config_dir }}/data"
+    state: directory
+    owner: "65534"
+    group: "65534"
+    mode: "0755"
+
+- name: Render Prometheus configuration
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ prometheus_config_dir }}/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  register: _prom_config
+  notify: Restart Prometheus
+
+- name: Run Prometheus container
+  community.docker.docker_container:
+    name: "{{ prometheus_container_name }}"
+    image: "{{ prometheus_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    networks: >-
+      {{
+        [{'name': (prometheus_network | default('internal_net'))}]
+        + ([{'name': 'lan_pub'}] if (prometheus_expose_host_port | default(true) | bool) else [])
+      }}
+    published_ports: "{{ [prometheus_bind_addr ~ ':' ~ (prometheus_host_port | string) ~ ':' ~ (prometheus_port | string)] if (prometheus_expose_host_port | default(true) | bool) else omit }}"
+    volumes:
+      - "{{ prometheus_config_dir }}/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "{{ prometheus_config_dir }}/data:/prometheus"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.listen-address=0.0.0.0:9090"
+      - "--web.enable-lifecycle"
+    user: "65534:65534"
+    state: started
+
+# =====================================================
+# 5⃣ Firewall note
+# =====================================================
+# Firewall ownership moved to roles/docker-firewall (playbooks/infra/firewall.yml).
+# Run that playbook after deploying Prometheus to apply DOCKER-USER rules.
+
+# =====================================================
+# 6️⃣ Verification
+# =====================================================
+- name: Wait for Prometheus to be ready (published mode)
+  ansible.builtin.uri:
+    url: "http://{{ prometheus_bind_addr }}:{{ prometheus_host_port }}/-/ready"
+    status_code: 200
+  register: _prom_ready
+  retries: 15
+  delay: 2
+  until: _prom_ready.status == 200
+  changed_when: false
+  when: prometheus_expose_host_port | bool
+
+- name: Wait for Prometheus container to be running (internal-only mode)
+  community.docker.docker_container_info:
+    name: "{{ prometheus_container_name }}"
+  register: _prom_info
+  retries: 15
+  delay: 2
+  until:
+    - _prom_info.exists
+    - _prom_info.container.State.Running
+  changed_when: false
+  when: not (prometheus_expose_host_port | bool)
+
+- name: Get host IP address
+  ansible.builtin.set_fact:
+    _host_ip: "{{ prometheus_bind_addr }}"
+
+- name: Show Prometheus deployment summary
+  ansible.builtin.debug:
+    msg:
+      - "✅ Prometheus + exporters deployed successfully!"
+      - ""
+      - "Exporters (internal only — no host ports):"
+      - "  • Node Exporter → internal_net:9100/metrics"
+      - "  • cAdvisor → internal_net:8080/metrics"
+      - ""
+      - "Prometheus (LAN-locked):"
+      - "  • Web UI → http://{{ _host_ip }}:{{ prometheus_host_port }}"
+      - "  • Targets → http://{{ _host_ip }}:{{ prometheus_host_port }}/targets"
+      - ""
+      - "Grafana datasource: http://prometheus:9090 (internal_net)"

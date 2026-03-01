@@ -1,0 +1,9 @@
+---
+- name: Deploy Steam Free-to-Keep Discord Notifier
+  hosts: tresor
+  become: true
+  gather_facts: false
+  vars:
+    steam_free_notifier_webhook: "{{ vault_steam_free_notifier_webhook }}"
+  roles:
+    - steam-free-notifier

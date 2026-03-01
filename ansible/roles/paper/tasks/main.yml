@@ -1,0 +1,232 @@
+---
+############################
+# 0) Preconditions
+############################
+- name: Assert required vars
+  ansible.builtin.assert:
+    that:
+      - paper_data_dir is defined
+      - mc_net is defined
+      - wg_bind_ip is defined         # host WireGuard IP on Tresor (e.g., 10.66.66.2)
+    fail_msg: "paper_data_dir/mc_net/wg_bind_ip missing."
+
+############################
+# 0.1) Preflight on host
+############################
+- name: Ensure Python Docker SDK is installed
+  become: true
+  ansible.builtin.apt:
+    name: python3-docker
+    state: present
+    update_cache: yes
+
+- name: Ensure mc_net exists
+  community.docker.docker_network:
+    name: "{{ mc_net }}"
+    state: present
+
+- name: Wait until WireGuard IP is configured on wg0
+  ansible.builtin.shell: "ip -o addr show dev wg0 | grep -q '{{ wg_bind_ip }}/'"
+  register: _wg_ip
+  changed_when: false
+  retries: 20
+  delay: 2
+  until: _wg_ip.rc == 0
+
+############################
+# 1) Ensure host paths exist WITH PROPER PERMISSIONS
+############################
+- name: Ensure Paper data dir exists
+  ansible.builtin.file:
+    path: "{{ paper_data_dir }}"
+    state: directory
+    owner: "{{ paper_uid | default(1000) }}"
+    group: "{{ paper_gid | default(1000) }}"
+    mode: "0755"
+
+- name: Ensure config subdir exists
+  ansible.builtin.file:
+    path: "{{ paper_data_dir }}/config"
+    state: directory
+    owner: "{{ paper_uid | default(1000) }}"
+    group: "{{ paper_gid | default(1000) }}"
+    mode: "0755"
+
+- name: Ensure config overlay dir exists
+  ansible.builtin.file:
+    path: "{{ paper_data_dir }}/config-overlay"
+    state: directory
+    owner: "{{ paper_uid | default(1000) }}"
+    group: "{{ paper_gid | default(1000) }}"
+    mode: "0755"
+
+- name: Enforce ownership/permissions on existing tree
+  ansible.builtin.file:
+    path: "{{ paper_data_dir }}"
+    state: directory
+    owner: "{{ paper_uid | default(1000) }}"
+    group: "{{ paper_gid | default(1000) }}"
+    mode: "u=rwX,g=rX,o=rX"
+    recurse: true
+
+############################
+# 2) Render configs (+ EULA)
+############################
+- name: Template server.properties
+  ansible.builtin.template:
+    src: "server.properties.j2"
+    dest: "{{ paper_data_dir }}/server.properties"
+    owner: "{{ paper_uid | default(1000) }}"
+    group: "{{ paper_gid | default(1000) }}"
+    mode: "0644"
+  notify: "{{ 'restart paper' if paper_apply_live | default(false) | bool else omit }}"
+
+# Template to overlay dir — itzg init copies /config/* over /data/config/*
+# This survives the image's default config generation on every boot
+- name: Template paper-global.yml to config overlay
+  ansible.builtin.template:
+    src: "paper-global.yml.j2"
+    dest: "{{ paper_data_dir }}/config-overlay/paper-global.yml"
+    owner: "{{ paper_uid | default(1000) }}"
+    group: "{{ paper_gid | default(1000) }}"
+    mode: "0644"
+  notify: restart paper
+  
+- name: Write velocity.secret file to container config dir
+  ansible.builtin.copy:
+    content: "{{ velocity_forwarding_secret }}"
+    dest: "{{ paper_data_dir }}/config/velocity.secret"
+    owner: "{{ paper_uid | default(1000) }}"
+    group: "{{ paper_gid | default(1000) }}"
+    mode: "0600"
+  no_log: true
+
+- name: Ensure EULA accepted (force write)
+  ansible.builtin.copy:
+    dest: "{{ paper_data_dir }}/eula.txt"
+    content: "eula=true\n"
+    owner: "{{ paper_uid | default(1000) }}"
+    group: "{{ paper_gid | default(1000) }}"
+    mode: "0640"
+
+- name: Assert eula.txt exists in data dir
+  ansible.builtin.stat:
+    path: "{{ paper_data_dir }}/eula.txt"
+  register: _eula_stat
+
+- name: Fail if eula.txt not present (bad paper_data_dir?)
+  ansible.builtin.fail:
+    msg: "eula.txt missing at {{ paper_data_dir }}; check paper_data_dir and the bind mount."
+  when: not _eula_stat.stat.exists
+
+############################
+# 3) Detect wrong mount (volume vs bind)
+############################
+- name: Get existing Paper container info (if any)
+  community.docker.docker_container_info:
+    name: "{{ paper_container | default('paper') }}"
+  register: paper_info
+  failed_when: false
+
+- name: Decide if we must recreate to fix /data mount
+  ansible.builtin.set_fact:
+    paper_needs_recreate: >-
+      {{
+        (paper_info.exists | default(false)) and (
+          ((paper_info.container.Mounts | selectattr('Destination','equalto','/data') | list | length) == 0) or
+          (((paper_info.container.Mounts | selectattr('Destination','equalto','/data') | list | first).Type | default('')) != 'bind') or
+          (((paper_info.container.Mounts | selectattr('Destination','equalto','/data') | list | first).Source | default('')) != paper_data_dir)
+        )
+      }}
+
+- name: Remove existing Paper container when mount is wrong
+  community.docker.docker_container:
+    name: "{{ paper_container | default('paper') }}"
+    state: absent
+    force_kill: true
+    keep_volumes: false
+  when: paper_needs_recreate | default(false)
+
+- name: Prune dangling volumes when recreating
+  community.docker.docker_prune:
+    containers: false
+    images: false
+    networks: false
+    volumes: true
+    builder_cache: false
+  when: paper_needs_recreate | default(false)
+
+############################
+# 4) Container definition (idempotent)
+############################
+- name: Create/ensure Paper container (host network mode, WireGuard-only bind)
+  community.docker.docker_container:
+    name: "{{ paper_container | default('paper') }}"
+    image: "{{ paper_image }}"
+    pull: true
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host
+    user: "{{ paper_uid | default(1000) }}:{{ paper_gid | default(1000) }}"
+    volumes:
+      - "{{ paper_data_dir }}:/data:rw"
+      - "{{ paper_data_dir }}/config-overlay/paper-global.yml:/config/paper-global.yml:ro"
+    env:
+      EULA: "TRUE"
+      TYPE: "PAPER"
+      VERSION: "{{ paper_version }}"
+      ONLINE_MODE: "{{ paper_online_mode | default('FALSE') }}"
+      ENFORCE_WHITELIST: "{{ paper_whitelist | default('TRUE') }}"
+      ENFORCE_SECURE_PROFILE: "FALSE"
+      USE_AIKAR_FLAGS: "true"
+      MEMORY: "{{ paper_memory | default('4G') }}"
+      ENABLE_RCON: "{{ paper_rcon_enable | default('FALSE') }}"
+      RCON_PASSWORD: "{{ paper_rcon_password | default(omit) }}"
+      RCON_PORT: "{{ paper_rcon_port | default('25575') }}"
+      USE_BUILTIN_DOWNLOADS: "TRUE"
+      TZ: "{{ paper_timezone | default(paper_tz | default('UTC')) }}"
+      SERVER_IP: "{{ wg_bind_ip }}"
+      SERVER_PORT: "25565"
+
+############################
+# 5) Firewall
+############################
+# Firewall ownership moved to roles/docker-firewall (playbooks/infra/firewall.yml).
+# Run that playbook after deploying Paper to apply DOCKER-USER rules.
+
+############################
+# 6) Verification
+############################
+- name: Verify Paper socket bound to WG IP only
+  ansible.builtin.command: "ss -H -lnpt 'sport = :25565'"
+  register: _ss
+  changed_when: false
+  retries: 15
+  delay: 5
+  until: _ss.stdout | length > 0
+
+- name: Assert bind is on WG IP
+  ansible.builtin.assert:
+    that:
+      - _ss.stdout is search('(\\[::ffff:)?' ~ (wg_bind_ip | regex_escape) ~ '(\\])?' ~ ':25565\\b')
+    fail_msg: "Paper is not bound to {{ wg_bind_ip }}:25565. Current sockets: {{ _ss.stdout }}"
+
+- name: Show Paper bind + container state summary
+  community.docker.docker_container_info:
+    name: "{{ paper_container }}"
+  register: _paper_state
+
+- name: Pretty summary
+  ansible.builtin.debug:
+    msg:
+      container: "{{ paper_container }}"
+      image: "{{ paper_image }}"
+      wg_bind_ip: "{{ wg_bind_ip }}"
+      networks: "{{ _paper_state.container.HostConfig.NetworkMode | default(mc_net) }}"
+      published: "{{ _paper_state.container.NetworkSettings.Ports | default({}) }}"
+      data_dir: "{{ paper_data_dir }}"
+
+- name: Print quick test tip
+  ansible.builtin.debug:
+    msg:
+      - "Now test (from VPS): ssh tresor-vps \"timeout 2 bash -c ': >/dev/tcp/{{ wg_bind_ip }}/25565' && echo ✅ CONNECTED || echo ❌ BLOCKED\""

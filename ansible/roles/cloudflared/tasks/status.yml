@@ -1,0 +1,77 @@
+---
+# roles/cloudflared/tasks/status.yml
+# Health checks for the cloudflared tunnel container.
+# - Honors cloudflared.enabled (e.g., QA can disable the tunnel)
+# - Optionally validates & probes the /metrics endpoint
+
+- name: Compute status flags
+  ansible.builtin.set_fact:
+    _cf_enabled: "{{ cloudflared.enabled | default(true) | bool }}"
+    _metrics_enabled: "{{ cloudflared.enable_metrics | default(true) | bool }}"
+    _metrics_port: "{{ cloudflared.metrics_port | default(8086) }}"
+
+- name: Gather container info
+  community.docker.docker_container_info:
+    name: cloudflared
+  register: _ci
+  changed_when: false
+
+# If disabled (e.g., QA), ensure it isn't running
+- name: cloudflared disabled — note & assert absent
+  when: not _cf_enabled
+  block:
+    - name: Note disabled
+      ansible.builtin.debug:
+        msg: "cloudflared is disabled for this host; skipping runtime checks."
+    - name: Assert container absent when disabled
+      ansible.builtin.assert:
+        that:
+          - not _ci.exists
+        quiet: true
+        fail_msg: "cloudflared is disabled but the container exists."
+
+# If enabled (e.g., PROD), verify it's healthy
+- name: cloudflared enabled — health checks
+  when: _cf_enabled
+  block:
+    - name: Assert container is running & clean exit code
+      ansible.builtin.assert:
+        that:
+          - _ci.exists
+          - _ci.container.State.Running
+          - _ci.container.State.ExitCode == 0
+        quiet: true
+        fail_msg: "cloudflared container not healthy."
+
+    - name: Verify metrics port binding (if enabled)
+      when: _metrics_enabled
+      vars:
+        bindings: "{{ _ci.container.HostConfig.PortBindings | default({}) }}"
+        metrics_key: "{{ (_metrics_port | string) ~ '/tcp' }}"
+      ansible.builtin.assert:
+        that:
+          - metrics_key in bindings
+          - bindings[metrics_key][0].HostIp == '127.0.0.1'
+          - (bindings[metrics_key][0].HostPort | int) == (_metrics_port | int)
+        quiet: true
+        fail_msg: "Expected metrics {{ _metrics_port }}/tcp bound to 127.0.0.1:{{ _metrics_port }}."
+
+    - name: Probe /metrics on localhost (if enabled)
+      when: _metrics_enabled
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ _metrics_port }}/metrics"
+        status_code: 200
+        return_content: false
+      register: _metrics_http
+      changed_when: false
+
+# Optional: show a tiny summary when running with -vv/-vvv
+- name: Status summary (verbose)
+  ansible.builtin.debug:
+    msg:
+      tunnel_id: "{{ cloudflared.tunnel_id | default('unknown') }}"
+      enabled: "{{ _cf_enabled }}"
+      metrics_enabled: "{{ _metrics_enabled }}"
+      metrics_port: "{{ _metrics_port }}"
+  when: (ansible_verbosity | int) >= 2
+

@@ -1,0 +1,80 @@
+---
+# Deploy WireGuard CLIENT on Tresor (connects to VPS)
+- name: Tresor | WireGuard client to VPS
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    wg_manage_ufw: false
+    wg_subnet: "10.66.66.0/24"
+    wg_interface: "wg0"
+    wg_address: "10.66.66.2/24"
+    wg_mtu: 1420
+    wg_table: "auto"
+    wg_dns: []
+    wg_private_key: "{{ vault_tresor_wg_private_key | default('') }}"
+    wg_private_key_file: "/etc/wireguard/privatekey"
+    wg_generate_keys_when_missing: true
+    vps_public_ip: "{{ hostvars['tresor-vps'].ansible_host }}"
+    vps_wireguard_public_key: "{{ vault_vps_wireguard_public_key | default('') }}"
+    wg_peers:
+      - name: "tresor-vps"
+        public_key: "{{ vps_wireguard_public_key }}"
+        preshared_key: "{{ vault_wg_psk }}" 
+        endpoint: "{{ vps_public_ip }}:51820"
+        allowed_ips:
+          - "10.66.66.1/32"
+        persistent_keepalive: 25
+    wg_enable: true
+    wg_state: "started"
+
+  pre_tasks:
+    - name: Check if VPS WireGuard is reachable
+      ansible.builtin.wait_for:
+        host: "{{ vps_public_ip }}"
+        port: 51820
+        timeout: 10
+      delegate_to: localhost
+      become: false
+      register: _vps_check
+      failed_when: false
+
+    - name: Warn if VPS not reachable
+      ansible.builtin.debug:
+        msg: "WARNING: VPS WireGuard not reachable."
+      when: _vps_check.failed | default(false)
+
+    - name: Verify VPS public key available
+      ansible.builtin.assert:
+        that:
+          - vps_wireguard_public_key | default('') | length > 0
+        fail_msg: "VPS public key missing"
+
+  roles:
+    - role: wireguard-client
+
+  post_tasks:
+    - name: Show wg facts
+      ansible.builtin.debug:
+        msg:
+          wg_bind_ip: "{{ wg_bind_ip | default('n/a') }}"
+
+    - name: Pause for handshake
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Show wg status
+      ansible.builtin.command: "wg show"
+      register: _wg
+      changed_when: false
+
+    - name: Test ping
+      ansible.builtin.command: "ping -c 3 10.66.66.1"
+      register: _ping
+      changed_when: false
+      failed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ 'SUCCESS!' if _ping.rc == 0 else 'FAILED' }}"

@@ -1,0 +1,11 @@
+---
+# Update FileBrowser: backup current state → deploy new version → verify health
+# Prerequisite: bump the version in group_vars/prod/versions.yml first
+- name: "Update FileBrowser — backup"
+  import_playbook: backup.yml
+
+- name: "Update FileBrowser — deploy"
+  import_playbook: deploy.yml
+
+- name: "Update FileBrowser — status"
+  import_playbook: status.yml

@@ -1,0 +1,38 @@
+---
+# Image — must be set via group_vars/prod → tresor_versions.grafana_image
+grafana_image: ""
+
+grafana_container_name: "grafana"
+grafana_user: "472:472"
+
+# Keep it on internal_net only by default; you can still publish a host port.
+grafana_networks:
+  - "internal_net"
+
+grafana_config_dir: "/mnt/ssd/configs/grafana"
+grafana_data_dir: "/mnt/ssd/configs/grafana/data"
+
+grafana_port: 3000
+grafana_bind_addr: "192.168.1.100"
+# Enable host publishing (LAN) by default for convenience
+grafana_expose_host_port: true
+grafana_host_port: 3000
+
+grafana_admin_user: "admin"
+grafana_admin_password: "changeme"
+
+# Traefik OFF by default for Grafana (you can turn ON via group_vars if needed)
+grafana_domain: "grafana.example.com"
+grafana_enable_traefik: false
+grafana_traefik_entrypoint: "web"
+grafana_traefik_middlewares: "chain-secure@file"
+
+# When Traefik is off, root_url points to LAN IP:port; override in group_vars if you like.
+grafana_root_url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}"
+grafana_serve_from_sub_path: false
+
+grafana_tz: "UTC"
+
+grafana_allow_embedding: false
+grafana_cookie_secure: false
+grafana_cookie_samesite: "lax"

@@ -1,0 +1,103 @@
+lan_ip: 192.168.1.100
+wg_ip: 10.66.66.2
+wg_bind_ip: '{{ wg_ip }}'
+wg_peer_vps: 10.66.66.1
+lan_subnet: 192.168.0.0/24
+wg_subnet: 10.66.66.0/24
+tresor_services:
+  jellyfin:
+    bind: '{{ lan_ip }}'
+    host_port: 8096
+    container_port: 8096
+    access: lan
+    networks:
+    - internal_net
+    - lan_pub
+  grafana:
+    bind: '{{ lan_ip }}'
+    host_port: 3000
+    container_port: 3000
+    access: lan
+    networks:
+    - internal_net
+    - lan_pub
+  filebrowser:
+    bind: '{{ lan_ip }}'
+    host_port: 8080
+    container_port: 80
+    access: lan
+    networks:
+    - internal_net
+    - lan_pub
+  kiwix:
+    bind: '{{ lan_ip }}'
+    host_port: 8181
+    container_port: 8080
+    access: lan
+    networks:
+    - internal_net
+    - lan_pub
+  prometheus:
+    bind: '{{ lan_ip }}'
+    host_port: 9090
+    container_port: 9090
+    access: lan
+    networks:
+    - internal_net
+    - lan_pub
+  filebrowser_public:
+    bind: '{{ wg_ip }}'
+    host_port: 8082
+    container_port: 80
+    access: wireguard
+    networks:
+    - public_net
+  jellyfin_music:
+    bind: '{{ wg_ip }}'
+    host_port: 18096
+    container_port: 8096
+    access: wireguard
+    networks:
+    - internal_net
+  paper:
+    bind: '{{ wg_ip }}'
+    host_port: 25565
+    container_port: 25565
+    access: wireguard
+  cloudflared:
+    bind: 127.0.0.1
+    host_port: 8086
+    container_port: 8086
+    access: localhost
+    networks:
+    - public_net
+  uptime_kuma:
+    bind: null
+    host_port: null
+    container_port: 3001
+    access: internal
+    networks:
+    - public_net
+  traefik:
+    bind: 127.0.0.1
+    host_port: 8080
+    container_port: 80
+    access: localhost
+    networks:
+    - public_net
+input_extra_rules:
+- port: 51820
+  proto: udp
+  action: ACCEPT
+  comment: WireGuard handshake from anywhere (VPS public IP may change)
+  src: 0.0.0.0/0
+- port: 25565
+  proto: tcp
+  action: ACCEPT
+  comment: Allow VPS WG peer to reach Paper
+  src: '{{ wg_peer_vps }}'
+- port: 25565
+  proto: tcp
+  action: DROP
+  comment: Drop all other TCP 25565 to Paper
+  src: 0.0.0.0/0

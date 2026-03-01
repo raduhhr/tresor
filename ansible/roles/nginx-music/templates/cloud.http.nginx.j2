@@ -1,0 +1,23 @@
+# Managed by Ansible: nginx-music role / cloud.conf  (HTTP bootstrap)
+# Serves cloud.example.com during LE cert issuance only.
+# ACME challenge passthrough — everything else returns placeholder.
+
+upstream filebrowser_public_upstream {
+  server {{ nginx_cloud_upstream_host }}:{{ nginx_cloud_upstream_port }};
+  keepalive 16;
+}
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name {{ nginx_cloud_domain }};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  location / {
+    return 200 "cloud.example.com bootstrap OK (cert pending)\n";
+    add_header Content-Type text/plain;
+  }
+}

@@ -1,0 +1,26 @@
+---
+# playbooks/traefik/deploy.yml
+- name: Deploy Traefik (HTTP behind Cloudflare Tunnel)
+  hosts: tresor
+  become: true
+
+  pre_tasks:
+    - name: Forbid public dashboard (must be off|local)
+      ansible.builtin.assert:
+        that: (traefik_dashboard_mode | default('off')) in ['off', 'local']
+        fail_msg: "Dashboard exposure forbidden. Allowed values: off | local."
+
+  tasks:
+    - name: Ensure public_net exists (idempotent)
+      community.docker.docker_network:
+        name: public_net
+        driver: bridge
+        internal: false
+        ipam_config:
+          - subnet: "172.30.0.0/24"
+            gateway: "172.30.0.1"
+
+    - name: Deploy Traefik
+      ansible.builtin.import_role:
+        name: traefik
+      tags: ['traefik']

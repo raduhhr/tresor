@@ -1,0 +1,9 @@
+{{ bday_notifier_log_path }} {
+  rotate {{ bday_notifier_logrotate_rotate }}
+  {{ bday_notifier_logrotate_frequency }}
+  missingok
+  notifempty
+  compress
+  delaycompress
+  copytruncate
+}

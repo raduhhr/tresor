@@ -1,0 +1,16 @@
+---
+- name: Deploy cloudflared (Cloudflare Tunnel → Traefik on public_net)
+  hosts: prod
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Ensure public_net exists (idempotent)
+      community.docker.docker_network:
+        name: public_net
+        driver: bridge
+        internal: false
+
+  roles:
+    - role: cloudflared
+

@@ -1,0 +1,318 @@
+---
+# playbooks/grafana/backup-test.yml
+# Full backup/restore lifecycle test for Grafana.
+# Fingerprints grafana.db to prove dashboard/user data survives the round-trip.
+#
+# Usage:
+#   ansible-playbook playbooks/grafana/backup-test.yml
+#   ansible-playbook playbooks/grafana/backup-test.yml -e confirm_test=yes
+
+########################################
+# Phase 1: Fresh backup
+########################################
+- name: "Backup Test — Phase 1: Fresh backup"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/grafana"
+    data_dir: "/mnt/ssd/configs/grafana"
+    container_name: "grafana"
+    confirm_test: "no"
+
+  tasks:
+
+    - name: Ensure backup directory exists
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Check if container is running
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _info
+      failed_when: false
+
+    - name: Stop container before backup
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+        stop_timeout: 30
+      when: _info.exists | default(false) and (_info.container.State.Running | default(false))
+
+    - name: Create fresh backup snapshot
+      ansible.builtin.shell: |
+        set -eu
+        DATE=$(date +%d%m%Y-%H%M)
+        SNAPSHOT="{{ backup_dir }}/grafana-backup-$DATE.tar.gz"
+        tar -czf "$SNAPSHOT" -C /mnt/ssd/configs grafana
+        echo "$SNAPSHOT"
+      register: _fresh_backup
+
+    - name: Show backup info
+      ansible.builtin.debug:
+        msg: "Fresh backup: {{ _fresh_backup.stdout }}"
+
+    - name: Stat the fresh backup
+      ansible.builtin.stat:
+        path: "{{ _fresh_backup.stdout }}"
+      register: _backup_stat
+
+    - name: Fail if backup is suspiciously small
+      ansible.builtin.fail:
+        msg: "Backup is only {{ (_backup_stat.stat.size / 1048576) | round(2) }} MB — too small."
+      when: _backup_stat.stat.size < 10240
+
+########################################
+# Phase 2: Fingerprint
+########################################
+- name: "Backup Test — Phase 2: Fingerprint"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/grafana"
+
+  tasks:
+
+    - name: Count files
+      ansible.builtin.shell: |
+        find {{ data_dir }} -type f | wc -l
+      register: _file_count_before
+      changed_when: false
+
+    - name: Get total size
+      ansible.builtin.shell: |
+        du -sb {{ data_dir }} | awk '{print $1}'
+      register: _size_before
+      changed_when: false
+
+    - name: Hash grafana.db (dashboards, users, orgs)
+      ansible.builtin.shell: |
+        if [ -f "{{ data_dir }}/data/grafana.db" ]; then
+          md5sum "{{ data_dir }}/data/grafana.db" | awk '{print $1}'
+        else
+          echo "no-grafana-db"
+        fi
+      register: _db_hash_before
+      changed_when: false
+
+    - name: Store fingerprint
+      ansible.builtin.set_fact:
+        pre_file_count: "{{ _file_count_before.stdout | trim }}"
+        pre_size_bytes: "{{ _size_before.stdout | trim }}"
+        pre_db_hash: "{{ _db_hash_before.stdout | trim }}"
+        test_backup_file: "{{ _fresh_backup.stdout }}"
+        cacheable: true
+
+    - name: Show fingerprint
+      ansible.builtin.debug:
+        msg:
+          files: "{{ pre_file_count }}"
+          size_mb: "{{ (pre_size_bytes | int / 1048576) | round(1) }}"
+          grafana_db_hash: "{{ pre_db_hash }}"
+
+########################################
+# Phase 3: Confirm
+########################################
+- name: "Backup Test — Phase 3: Confirm"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/grafana"
+    confirm_test: "no"
+
+  tasks:
+
+    - name: "⚠️  BACKUP TEST CONFIRMATION"
+      ansible.builtin.pause:
+        prompt: |
+          GRAFANA BACKUP/RESTORE TEST
+          Backup:     {{ test_backup_file | basename }}
+          DB hash:    {{ pre_db_hash }}
+          Files:      {{ pre_file_count }}
+          This will WIPE {{ data_dir }} and restore. Type 'yes'
+      register: _confirm
+      when: confirm_test | lower != 'yes'
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Backup test aborted."
+      when:
+        - confirm_test | lower != 'yes'
+        - _confirm.user_input | default('') | lower != 'yes'
+
+########################################
+# Phase 4: Destroy
+########################################
+- name: "Backup Test — Phase 4: Teardown"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/grafana"
+    container_name: "grafana"
+
+  tasks:
+
+    - name: Stop container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+        stop_timeout: 30
+      failed_when: false
+
+    - name: Remove container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+        force_kill: true
+      failed_when: false
+
+    - name: Wipe data directory
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: absent
+
+    - name: Verify wiped
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: _wiped
+
+    - name: Confirm wipe
+      ansible.builtin.assert:
+        that: not _wiped.stat.exists
+
+########################################
+# Phase 5: Restore
+########################################
+- name: "Backup Test — Phase 5: Restore"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/grafana"
+
+  tasks:
+
+    - name: Ensure parent dir exists
+      ansible.builtin.file:
+        path: /mnt/ssd/configs
+        state: directory
+        mode: '0755'
+
+    - name: Extract backup
+      ansible.builtin.shell: |
+        tar -xzf "{{ test_backup_file }}" -C /mnt/ssd/configs
+
+    - name: Verify restored
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: _restored
+
+    - name: Fail if extraction failed
+      ansible.builtin.fail:
+        msg: "Extraction didn't produce {{ data_dir }}."
+      when: not _restored.stat.exists
+
+    - name: Fix ownership
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: directory
+        owner: "472"
+        group: "472"
+        recurse: true
+
+########################################
+# Phase 6: Redeploy
+########################################
+- name: "Backup Test — Phase 6: Redeploy"
+  import_playbook: deploy.yml
+
+########################################
+# Phase 7: Verify integrity
+########################################
+- name: "Backup Test — Phase 7: Verify"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/grafana"
+    container_name: "grafana"
+
+  tasks:
+
+    - name: Count files after
+      ansible.builtin.shell: |
+        find {{ data_dir }} -type f | wc -l
+      register: _file_count_after
+      changed_when: false
+
+    - name: Get total size after
+      ansible.builtin.shell: |
+        du -sb {{ data_dir }} | awk '{print $1}'
+      register: _size_after
+      changed_when: false
+
+    - name: Hash grafana.db after
+      ansible.builtin.shell: |
+        if [ -f "{{ data_dir }}/data/grafana.db" ]; then
+          md5sum "{{ data_dir }}/data/grafana.db" | awk '{print $1}'
+        else
+          echo "no-grafana-db"
+        fi
+      register: _db_hash_after
+      changed_when: false
+
+    - name: Compare fingerprints
+      ansible.builtin.debug:
+        msg:
+          metric:       ["Before", "After", "Match"]
+          file_count:   ["{{ pre_file_count }}", "{{ _file_count_after.stdout | trim }}", "{{ pre_file_count == _file_count_after.stdout | trim }}"]
+          size_bytes:   ["{{ pre_size_bytes }}", "{{ _size_after.stdout | trim }}", "{{ pre_size_bytes == _size_after.stdout | trim }}"]
+          grafana_db:   ["{{ pre_db_hash }}", "{{ _db_hash_after.stdout | trim }}", "{{ pre_db_hash == _db_hash_after.stdout | trim }}"]
+
+    - name: Assert DB integrity
+      ansible.builtin.assert:
+        that:
+          - pre_db_hash == _db_hash_after.stdout | trim
+        success_msg: "✅ grafana.db hash matches — dashboards & users intact!"
+        fail_msg: "❌ grafana.db hash MISMATCH! Before: {{ pre_db_hash }} After: {{ _db_hash_after.stdout | trim }}"
+
+    - name: Warn if file count off
+      ansible.builtin.debug:
+        msg: "⚠️  File count differs by {{ (pre_file_count | int - _file_count_after.stdout | trim | int) | abs }}. Small diffs normal (re-templated provisioning)."
+      when: (pre_file_count | int - _file_count_after.stdout | trim | int) | abs > 5
+
+    - name: Verify container running
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _final
+
+    - name: Assert container is up
+      ansible.builtin.assert:
+        that:
+          - _final.exists
+          - _final.container.State.Running
+        success_msg: "✅ Grafana container running"
+
+    - name: "🎉 BACKUP TEST PASSED"
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════"
+          - "  GRAFANA BACKUP/RESTORE TEST: PASSED"
+          - "════════════════════════════════════════════════"
+          - "  DB hash:      ✅ {{ pre_db_hash }}"
+          - "  Files:        {{ pre_file_count }} → {{ _file_count_after.stdout | trim }}"
+          - "  Container:    ✅ running"
+          - "════════════════════════════════════════════════"

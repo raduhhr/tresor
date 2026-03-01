@@ -1,0 +1,8 @@
+# roles/paper/handlers/main.yml
+- name: restart paper
+  community.docker.docker_container:
+    name: "{{ paper_container | default('paper') }}"
+    state: started
+    restart: true
+
+

@@ -1,0 +1,61 @@
+---
+# cloud-test.yml — dumps live nginx config to find zero-size zone source
+# Run: ansible-playbook -i inventory/hosts.ini playbooks/vps/debug-nginx-cloud.yml
+
+- name: "VPS | Debug nginx cloud zone error"
+  hosts: vps
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: "List conf.d"
+      ansible.builtin.command: ls -la /etc/nginx/conf.d/
+      changed_when: false
+      register: _confd
+    - ansible.builtin.debug: { var: _confd.stdout_lines }
+
+    - name: "List sites-enabled"
+      ansible.builtin.command: ls -la /etc/nginx/sites-enabled/
+      changed_when: false
+      register: _sites
+    - ansible.builtin.debug: { var: _sites.stdout_lines }
+
+    - name: "cat cloud-zones.conf"
+      ansible.builtin.command: cat /etc/nginx/conf.d/cloud-zones.conf
+      changed_when: false
+      register: _zones
+      failed_when: false
+    - ansible.builtin.debug: { var: _zones.stdout_lines }
+
+    - name: "cat cloud.conf"
+      ansible.builtin.command: cat /etc/nginx/sites-available/cloud.conf
+      changed_when: false
+      register: _cloud
+      failed_when: false
+    - ansible.builtin.debug: { var: _cloud.stdout_lines }
+
+    - name: "grep cloud_conn everywhere in nginx config"
+      ansible.builtin.shell: "grep -rn 'cloud_conn\\|cloud_req' /etc/nginx/ 2>/dev/null || true"
+      changed_when: false
+      register: _grep
+    - ansible.builtin.debug: { var: _grep.stdout_lines }
+
+    - name: "nginx -T (full parsed config) — grep zones"
+      ansible.builtin.shell: "nginx -T 2>&1 | grep -n 'cloud_conn\\|cloud_req\\|limit_conn_zone\\|limit_req_zone' || true"
+      changed_when: false
+      register: _nginxT
+    - ansible.builtin.debug: { var: _nginxT.stdout_lines }
+
+      
+    - name: "cat nginx.conf (numbered)"
+      ansible.builtin.command: cat -n /etc/nginx/nginx.conf
+      changed_when: false
+      register: _nginxconf
+    - ansible.builtin.debug: { var: _nginxconf.stdout_lines }
+
+    - name: "nginx -T first 120 lines (parsed config + file markers)"
+      ansible.builtin.shell: "nginx -T 2>&1 | head -120"
+      changed_when: false
+      register: _nginxT
+      failed_when: false
+    - ansible.builtin.debug: { var: _nginxT.stdout_lines }

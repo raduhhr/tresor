@@ -1,0 +1,9 @@
+---
+- name: Verify base setup
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - import_tasks: "../../roles/base/tasks/verify.yml"
+      tags: [base, base:verify]

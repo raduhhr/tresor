@@ -1,0 +1,208 @@
+
+###############################
+# File: ./tasks/main.yml
+###############################
+---
+# roles/jellyfin-music/tasks/main.yml
+
+# Assumptions:
+# - play has become: true (recommended)
+# - jellyfin_music_* vars are set in defaults/vars/group_vars
+
+# -------------------------------------------------------------------
+# 0) Sanity
+# -------------------------------------------------------------------
+- name: "Sanity: jellyfin_music_media_dir must be set"
+  ansible.builtin.assert:
+    that:
+      - jellyfin_music_media_dir is defined
+      - jellyfin_music_media_dir | length > 0
+    fail_msg: "Set jellyfin_music_media_dir (example: /mnt/data/files/Music)."
+
+- name: "Sanity: jellyfin_music_image must be repo/name:tag"
+  ansible.builtin.assert:
+    that:
+      - jellyfin_music_image is defined
+      - jellyfin_music_image | length > 0
+      - "':' in jellyfin_music_image"
+    fail_msg: "Set jellyfin_music_image like: jellyfin/jellyfin:10.9.11 (or :latest)."
+
+- name: "Sanity: wg interface must exist"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ip link show "{{ jellyfin_music_wg_iface | default('wg0') }}" >/dev/null 2>&1
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: "Sanity: wg iface must contain jellyfin_music_bind_addr (any mask)"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    iface="{{ jellyfin_music_wg_iface | default('wg0') }}"
+    ip="{{ jellyfin_music_bind_addr }}"
+    ip -4 -o addr show dev "$iface" \
+      | awk '{print $4}' | cut -d/ -f1 \
+      | grep -Fqx "$ip"
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+# -------------------------------------------------------------------
+# 1) Resolve media group gid (container group)
+# -------------------------------------------------------------------
+- name: Lookup media group gid
+  ansible.builtin.getent:
+    database: group
+    key: "{{ jellyfin_music_group_name }}"
+  register: _jf_grp
+
+- name: Set jellyfin_music_gid fact (fail clearly if missing)
+  ansible.builtin.set_fact:
+    jellyfin_music_gid: "{{ _jf_grp.ansible_facts.getent_group[jellyfin_music_group_name][1] | int }}"
+  failed_when: _jf_grp.ansible_facts.getent_group[jellyfin_music_group_name] is not defined
+
+# -------------------------------------------------------------------
+# 2) Ensure config dirs exist
+# -------------------------------------------------------------------
+- name: Ensure Jellyfin Music config dir exists
+  ansible.builtin.file:
+    path: "{{ jellyfin_music_config_dir }}"
+    state: directory
+    owner: "{{ jellyfin_music_uid | int }}"
+    group: "{{ jellyfin_music_gid | int }}"
+    mode: "0775"
+    recurse: true
+
+- name: Ensure required subdirs exist (config/, log/)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jellyfin_music_uid | int }}"
+    group: "{{ jellyfin_music_gid | int }}"
+    mode: "0775"
+  loop:
+    - "{{ jellyfin_music_config_dir }}/config"
+    - "{{ jellyfin_music_config_dir }}/log"
+
+# -------------------------------------------------------------------
+# 3) Assert music dir exists
+# -------------------------------------------------------------------
+- name: Assert music directory exists on host
+  ansible.builtin.stat:
+    path: "{{ jellyfin_music_media_dir }}"
+  register: _music_stat
+
+- name: Fail if music dir missing
+  ansible.builtin.assert:
+    that:
+      - _music_stat.stat.exists
+      - _music_stat.stat.isdir
+    fail_msg: "Music dir does not exist: {{ jellyfin_music_media_dir }}"
+
+# -------------------------------------------------------------------
+# 3b) Assert movies and TV shows dirs exist
+# -------------------------------------------------------------------
+- name: Assert movies directory exists on host
+  ansible.builtin.stat:
+    path: "{{ jellyfin_music_movies_dir }}"
+  register: _movies_stat
+
+- name: Fail if movies dir missing
+  ansible.builtin.assert:
+    that:
+      - _movies_stat.stat.exists
+      - _movies_stat.stat.isdir
+    fail_msg: "Movies dir does not exist: {{ jellyfin_music_movies_dir }}"
+
+- name: Assert TV shows directory exists on host
+  ansible.builtin.stat:
+    path: "{{ jellyfin_music_tvshows_dir }}"
+  register: _tvshows_stat
+
+- name: Fail if TV shows dir missing
+  ansible.builtin.assert:
+    that:
+      - _tvshows_stat.stat.exists
+      - _tvshows_stat.stat.isdir
+    fail_msg: "TV shows dir does not exist: {{ jellyfin_music_tvshows_dir }}"
+
+# -------------------------------------------------------------------
+# 4) Port sanity check (avoid collisions)
+# -------------------------------------------------------------------
+- name: Ensure Jellyfin Music host port is free (best-effort)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ss -tln "( sport = :{{ jellyfin_music_listen_port }} )" | tail -n +2 | wc -l
+  args:
+    executable: /bin/bash
+  register: _pcheck
+  changed_when: false
+
+- name: Fail if Jellyfin Music port is already bound
+  ansible.builtin.assert:
+    that: "{{ _pcheck.stdout | int == 0 }}"
+    fail_msg: "Port {{ jellyfin_music_listen_port }} already in use on host."
+
+# -------------------------------------------------------------------
+# 5) Build volumes/devices
+# -------------------------------------------------------------------
+- name: Build Jellyfin Music volumes (multi-media)
+  ansible.builtin.set_fact:
+    jellyfin_music_volumes:
+      - "{{ jellyfin_music_config_dir }}:/config"
+      - "/etc/localtime:/etc/localtime:ro"
+      - "{{ jellyfin_music_media_dir }}:/media/music:ro"
+      - "{{ jellyfin_music_movies_dir }}:/media/movies:ro"
+      - "{{ jellyfin_music_tvshows_dir }}:/media/tvshows:ro"
+
+- name: Define device list (VAAPI optional)
+  ansible.builtin.set_fact:
+    jellyfin_music_devices: "{{ [ jellyfin_music_vaapi_device ~ ':' ~ jellyfin_music_vaapi_device ] if (jellyfin_music_enable_vaapi | bool) else [] }}"
+
+# -------------------------------------------------------------------
+# 6) Run container
+# -------------------------------------------------------------------
+- name: Run Jellyfin Music container (recreate + publish)
+  community.docker.docker_container:
+    name: "{{ jellyfin_music_container_name }}"
+    image: "{{ jellyfin_music_image }}"
+    state: started
+    restart_policy: unless-stopped
+
+    # IMPORTANT: don't let the module implicitly set network_mode to your first network
+    # (happens when networks_cli_compatible=true and networks is set)
+    networks_cli_compatible: false
+    network_mode: default
+
+    networks:
+      - name: "{{ jellyfin_music_network }}"
+
+    published_ports:
+      # bind to wg ip only
+      - "{{ jellyfin_music_bind_addr }}:{{ jellyfin_music_listen_port }}:8096"
+
+    volumes: "{{ jellyfin_music_volumes }}"
+    devices: "{{ jellyfin_music_devices }}"
+    env:
+      TZ: "UTC"
+  become: true
+
+
+# -------------------------------------------------------------------
+# 9) Final runtime verification (docker port + ss + quick curl)
+# -------------------------------------------------------------------
+- name: Inspect container (truth)
+  community.docker.docker_container_info:
+    name: "{{ jellyfin_music_container_name }}"
+  register: jfinfo
+
+- name: Assert published port exists
+  ansible.builtin.assert:
+    that:
+      - jfinfo.container.NetworkSettings.Ports is mapping
+      - jfinfo.container.NetworkSettings.Ports['8096/tcp'] is defined
+      - (jfinfo.container.NetworkSettings.Ports['8096/tcp'] | length) > 0
+    fail_msg: >
+      No published port detected. NetworkSettings.Ports = {{
+        jfinfo.container.NetworkSettings.Ports | to_nice_json
+      }}

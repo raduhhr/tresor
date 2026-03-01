@@ -1,0 +1,281 @@
+---
+# playbooks/uptime-kuma/backup-test.yml
+# Full backup/restore lifecycle test for Uptime Kuma.
+# Fingerprints kuma.db to prove monitor configs & incident history survive.
+#
+# Usage:
+#   ansible-playbook playbooks/uptime-kuma/backup-test.yml
+#   ansible-playbook playbooks/uptime-kuma/backup-test.yml -e confirm_test=yes
+
+- name: "Backup Test — Phase 1: Fresh backup"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/uptime-kuma"
+    data_dir: "/mnt/ssd/configs/uptime-kuma"
+    container_name: "uptime-kuma"
+    confirm_test: "no"
+
+  tasks:
+
+    - name: Ensure backup directory exists
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Check if container is running
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _info
+      failed_when: false
+
+    - name: Stop container before backup
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+        stop_timeout: 30
+      when: _info.exists | default(false) and (_info.container.State.Running | default(false))
+
+    - name: Create fresh backup
+      ansible.builtin.shell: |
+        set -eu
+        DATE=$(date +%d%m%Y-%H%M)
+        SNAPSHOT="{{ backup_dir }}/uptime-kuma-backup-$DATE.tar.gz"
+        tar -czf "$SNAPSHOT" -C /mnt/ssd/configs uptime-kuma
+        echo "$SNAPSHOT"
+      register: _fresh_backup
+
+    - name: Stat backup
+      ansible.builtin.stat:
+        path: "{{ _fresh_backup.stdout }}"
+      register: _backup_stat
+
+    - name: Fail if too small
+      ansible.builtin.fail:
+        msg: "Backup only {{ (_backup_stat.stat.size / 1048576) | round(2) }} MB."
+      when: _backup_stat.stat.size < 10240
+
+- name: "Backup Test — Phase 2: Fingerprint"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/uptime-kuma"
+
+  tasks:
+
+    - name: Count files
+      ansible.builtin.shell: find {{ data_dir }} -type f | wc -l
+      register: _file_count_before
+      changed_when: false
+
+    - name: Get size
+      ansible.builtin.shell: du -sb {{ data_dir }} | awk '{print $1}'
+      register: _size_before
+      changed_when: false
+
+    - name: Hash kuma.db (monitors, incidents, users)
+      ansible.builtin.shell: |
+        if [ -f "{{ data_dir }}/kuma.db" ]; then
+          md5sum "{{ data_dir }}/kuma.db" | awk '{print $1}'
+        else
+          echo "no-kuma-db"
+        fi
+      register: _db_hash_before
+      changed_when: false
+
+    - name: Store fingerprint
+      ansible.builtin.set_fact:
+        pre_file_count: "{{ _file_count_before.stdout | trim }}"
+        pre_size_bytes: "{{ _size_before.stdout | trim }}"
+        pre_db_hash: "{{ _db_hash_before.stdout | trim }}"
+        test_backup_file: "{{ _fresh_backup.stdout }}"
+        cacheable: true
+
+    - name: Show fingerprint
+      ansible.builtin.debug:
+        msg:
+          files: "{{ pre_file_count }}"
+          size_mb: "{{ (pre_size_bytes | int / 1048576) | round(1) }}"
+          kuma_db_hash: "{{ pre_db_hash }}"
+
+- name: "Backup Test — Phase 3: Confirm"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/uptime-kuma"
+    confirm_test: "no"
+
+  tasks:
+
+    - name: "⚠️  BACKUP TEST CONFIRMATION"
+      ansible.builtin.pause:
+        prompt: |
+          UPTIME KUMA BACKUP/RESTORE TEST
+          Backup:     {{ test_backup_file | basename }}
+          DB hash:    {{ pre_db_hash }}
+          This will WIPE {{ data_dir }} and restore. Type 'yes'
+      register: _confirm
+      when: confirm_test | lower != 'yes'
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Test aborted."
+      when:
+        - confirm_test | lower != 'yes'
+        - _confirm.user_input | default('') | lower != 'yes'
+
+- name: "Backup Test — Phase 4: Teardown"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/uptime-kuma"
+    container_name: "uptime-kuma"
+
+  tasks:
+
+    - name: Stop container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+        stop_timeout: 30
+      failed_when: false
+
+    - name: Remove container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+        force_kill: true
+      failed_when: false
+
+    - name: Wipe data directory
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: absent
+
+    - name: Verify wiped
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: _wiped
+
+    - name: Confirm wipe
+      ansible.builtin.assert:
+        that: not _wiped.stat.exists
+
+- name: "Backup Test — Phase 5: Restore"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/uptime-kuma"
+
+  tasks:
+
+    - name: Ensure parent dir
+      ansible.builtin.file:
+        path: /mnt/ssd/configs
+        state: directory
+        mode: '0755'
+
+    - name: Extract backup
+      ansible.builtin.shell: |
+        tar -xzf "{{ test_backup_file }}" -C /mnt/ssd/configs
+
+    - name: Verify restored
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: _restored
+
+    - name: Fail if not restored
+      ansible.builtin.fail:
+        msg: "Extraction didn't produce {{ data_dir }}."
+      when: not _restored.stat.exists
+
+    - name: Fix ownership
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: directory
+        owner: root
+        group: root
+        recurse: true
+
+- name: "Backup Test — Phase 6: Redeploy"
+  import_playbook: deploy.yml
+
+- name: "Backup Test — Phase 7: Verify"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/uptime-kuma"
+    container_name: "uptime-kuma"
+
+  tasks:
+
+    - name: Count files after
+      ansible.builtin.shell: find {{ data_dir }} -type f | wc -l
+      register: _file_count_after
+      changed_when: false
+
+    - name: Get size after
+      ansible.builtin.shell: du -sb {{ data_dir }} | awk '{print $1}'
+      register: _size_after
+      changed_when: false
+
+    - name: Hash kuma.db after
+      ansible.builtin.shell: |
+        if [ -f "{{ data_dir }}/kuma.db" ]; then
+          md5sum "{{ data_dir }}/kuma.db" | awk '{print $1}'
+        else
+          echo "no-kuma-db"
+        fi
+      register: _db_hash_after
+      changed_when: false
+
+    - name: Compare fingerprints
+      ansible.builtin.debug:
+        msg:
+          metric:     ["Before", "After", "Match"]
+          file_count: ["{{ pre_file_count }}", "{{ _file_count_after.stdout | trim }}", "{{ pre_file_count == _file_count_after.stdout | trim }}"]
+          kuma_db:    ["{{ pre_db_hash }}", "{{ _db_hash_after.stdout | trim }}", "{{ pre_db_hash == _db_hash_after.stdout | trim }}"]
+
+    - name: Assert DB integrity
+      ansible.builtin.assert:
+        that:
+          - pre_db_hash == _db_hash_after.stdout | trim
+        success_msg: "✅ kuma.db hash matches — monitors & incidents intact!"
+        fail_msg: "❌ kuma.db MISMATCH! Before: {{ pre_db_hash }} After: {{ _db_hash_after.stdout | trim }}"
+
+    - name: Verify container running
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _final
+
+    - name: Assert container up
+      ansible.builtin.assert:
+        that:
+          - _final.exists
+          - _final.container.State.Running
+
+    - name: "🎉 BACKUP TEST PASSED"
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════"
+          - "  UPTIME KUMA BACKUP/RESTORE TEST: PASSED"
+          - "════════════════════════════════════════════════"
+          - "  DB hash:      ✅ {{ pre_db_hash }}"
+          - "  Files:        {{ pre_file_count }} → {{ _file_count_after.stdout | trim }}"
+          - "  Container:    ✅ running"
+          - "════════════════════════════════════════════════"

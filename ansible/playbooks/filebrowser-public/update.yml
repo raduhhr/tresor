@@ -1,0 +1,8 @@
+---
+# Update the image pin in inventory/group_vars/prod/versions.yml first.
+- name: Update filebrowser-public
+  hosts: prod
+  gather_facts: true
+  become: false
+  roles:
+    - filebrowser-public

@@ -1,0 +1,181 @@
+---
+# tasks file for roles/jellyfin
+
+
+# 0.1) Detect Docker userns remap base (default: root line in /etc/subuid)
+#      Override with: docker_userns_name: "dockremap"  (in group_vars if needed)
+- name: Set default userns name (can be overridden)
+  ansible.builtin.set_fact:
+    docker_userns_name: "{{ docker_userns_name | default('root') }}"
+
+- name: Read /etc/subuid (to detect userns base)
+  ansible.builtin.slurp:
+    src: /etc/subuid
+  register: _subuid
+  ignore_errors: true
+
+- name: Compute subuid start (if present)
+  ansible.builtin.set_fact:
+    docker_subuid_start: "{{ ( (_subuid.content | b64decode).splitlines()
+                               | select('match', '^' ~ docker_userns_name ~ ':[0-9]+:[0-9]+$')
+                               | list | first ).split(':')[1] | int }}"
+  when: _subuid is defined and _subuid.content is defined
+        and ( (_subuid.content | b64decode).splitlines()
+              | select('match', '^' ~ docker_userns_name ~ ':[0-9]+:[0-9]+$')
+              | list | length ) > 0
+
+- name: Determine if userns remap appears enabled
+  ansible.builtin.set_fact:
+    docker_userns_enabled: "{{ docker_userns_enabled | default( docker_subuid_start is defined ) }}"
+
+# 0.2) Compute *host* ownership to satisfy userns (uid/gid inside container map to host ids)
+- name: Compute remapped host IDs (when userns enabled)
+  ansible.builtin.set_fact:
+    jellyfin_host_uid: "{{ docker_subuid_start + (jellyfin_uid | int) }}"
+    jellyfin_host_gid: "{{ docker_subuid_start + (jellyfin_gid | int) }}"
+  when: docker_userns_enabled | bool
+
+- name: Compute host IDs (no userns)
+  ansible.builtin.set_fact:
+    jellyfin_host_uid: "{{ jellyfin_uid | int }}"
+    jellyfin_host_gid: "{{ jellyfin_gid | int }}"
+  when: not (docker_userns_enabled | bool)
+
+# 1) Folders (own by *host* IDs that match container after userns mapping)
+- name: Ensure Jellyfin config dir exists (correct owner for userns)
+  ansible.builtin.file:
+    path: "{{ jellyfin_config_dir }}"
+    state: directory
+    owner: "{{ jellyfin_host_uid }}"
+    group: "{{ jellyfin_host_gid }}"
+    mode: "0775"
+    recurse: true
+
+- name: Ensure required subdirs under config exist (config/, log/)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jellyfin_host_uid }}"
+    group: "{{ jellyfin_host_gid }}"
+    mode: "0775"
+  loop:
+    - "{{ jellyfin_config_dir }}/config"
+    - "{{ jellyfin_config_dir }}/log"
+
+# 2) Resolve media group GID (for container user)
+- name: Lookup media group gid
+  ansible.builtin.getent:
+    database: group
+    key: "{{ jellyfin_group_name }}"
+  register: jellyfin_group_ge
+
+- name: Set jellyfin_gid fact (fail clearly if missing)
+  ansible.builtin.set_fact:
+    jellyfin_gid: "{{ jellyfin_group_ge.ansible_facts.getent_group[jellyfin_group_name][1] | int }}"
+  failed_when: jellyfin_group_ge.ansible_facts.getent_group[jellyfin_group_name] is not defined
+
+# 3) Compose volume list (media mounts are RO)
+- name: Init base volumes
+  ansible.builtin.set_fact:
+    jellyfin_base_volumes:
+      - "{{ jellyfin_config_dir }}:/config"
+      - "/etc/localtime:/etc/localtime:ro"
+
+- name: Ensure at least one media dir is set
+  ansible.builtin.assert:
+    that:
+      - jellyfin_media_dirs | length > 0
+    fail_msg: "No media directories configured. Set jellyfin_media_dirs (e.g. ['/mnt/data/data/media'])."
+
+- name: Build media mounts (single root)
+  ansible.builtin.set_fact:
+    jellyfin_media_mounts:
+      - "{{ (jellyfin_media_dirs | first) }}:/media:ro"
+  when: (jellyfin_media_dirs | length) == 1
+
+- name: Build media mounts (enumerated)
+  ansible.builtin.set_fact:
+    jellyfin_media_mounts: "{{ (jellyfin_media_mounts | default([])) + [ item ~ ':/media/' ~ idx ~ ':ro' ] }}"
+  loop: "{{ jellyfin_media_dirs | list }}"
+  loop_control:
+    index_var: idx
+  when: (jellyfin_media_dirs | length) > 1
+
+- name: Optional photos mount
+  ansible.builtin.set_fact:
+    jellyfin_photos_mount: [ "{{ jellyfin_photos_jpg_dir }}:/photos:ro" ]
+  when: jellyfin_photos_jpg_dir | length > 0
+
+- name: Finalize volumes
+  ansible.builtin.set_fact:
+    jellyfin_volumes: "{{ jellyfin_base_volumes + (jellyfin_media_mounts | default([])) + (jellyfin_photos_mount | default([])) }}"
+
+# 4) Ensure media/photo dirs exist on QA/dev (idempotent)
+- name: Ensure media/photo dirs exist (QA/dev)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jellyfin_host_uid }}"        # host ownership for userns
+    group: "{{ jellyfin_host_gid }}"
+    mode: "0775"
+  loop: >-
+    {{
+      jellyfin_media_dirs
+      + ((jellyfin_photos_jpg_dir|length > 0) | ternary([jellyfin_photos_jpg_dir], []))
+    }}
+  when: jellyfin_create_media_dirs | default(true)
+
+# 5) Sanity checks
+- name: Assert media dirs exist on host
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: _mdirs
+  loop: "{{ jellyfin_media_dirs }}"
+
+- name: Fail if any media dir missing
+  ansible.builtin.assert:
+    that:
+      - (_mdirs.results | selectattr('stat.exists','equalto', false) | list | length) == 0
+    fail_msg: "One or more jellyfin_media_dirs do not exist on the host."
+
+- name: Check if jellyfin container already exists
+  community.docker.docker_container_info:
+    name: jellyfin
+  register: _jf_existing
+  failed_when: false
+  changed_when: false
+
+- name: Ensure 8096 is free (first run only)
+  ansible.builtin.shell: "ss -tln '( sport = :8096 )' | tail -n +2 | wc -l"
+  register: _pcheck
+  changed_when: false
+  when: not (_jf_existing.exists | default(false))
+
+- name: Fail if 8096 already bound (first run only)
+  ansible.builtin.assert:
+    that: "{{ _pcheck.stdout | int == 0 }}"
+    fail_msg: "Port 8096 already in use on host."
+  when: not (_jf_existing.exists | default(false))
+
+# 6) VAAPI device list (optional)
+- name: Define device list (VAAPI optional)
+  ansible.builtin.set_fact:
+    jellyfin_devices: "{{ [ jellyfin_vaapi_device ~ ':' ~ jellyfin_vaapi_device ] if jellyfin_enable_vaapi else [] }}"
+
+# 7) Start Jellyfin
+- name: Run Jellyfin container
+  community.docker.docker_container:
+    name: jellyfin
+    image: "{{ jellyfin_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ jellyfin_network }}"
+    user: "{{ jellyfin_uid }}:{{ jellyfin_gid }}"
+    published_ports:
+      - "{{ jellyfin_bind_addr }}:{{ jellyfin_listen_port }}:8096"
+    volumes: "{{ jellyfin_volumes }}"
+    devices: "{{ jellyfin_devices }}"
+    tty: false
+    state: started
+

@@ -1,0 +1,22 @@
+# playbooks/infra/setup-base.yml
+# NOTE: This playbook installs iptables-persistent which flushes existing rules.
+# After running this, re-run playbooks/infra/firewall.yml to restore the DOCKER-USER
+# chain and all service INPUT rules.
+
+---
+- name: Base system prep (Debian 12)
+  hosts: tresor
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Assert Debian 12
+      assert:
+        that:
+          - ansible_facts.os_family == "Debian"
+          - ansible_facts.distribution_major_version == "12"
+        fail_msg: "This playbook is for Debian 12 only."
+
+  roles:
+    - role: base
+      tags: [base]

@@ -1,0 +1,10 @@
+---
+- name: Remove prometheus container
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove prometheus container
+      community.docker.docker_container:
+        name: prometheus
+        state: absent
+        force_kill: true

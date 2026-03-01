@@ -1,0 +1,71 @@
+# Managed by Ansible: nginx-music role / cloud.conf  (TLS production)
+# Reverse proxy for filebrowser-public on Tresor over WireGuard.
+#
+# NOTE: limit_conn is intentionally omitted — nginx 1.26.3 bug causes
+# limit_conn_zone to be zeroed when limit_conn is used in an included
+# server{} block. Use limit_req for rate limiting instead.
+
+upstream filebrowser_public_upstream {
+  server {{ nginx_cloud_upstream_host }}:{{ nginx_cloud_upstream_port }};
+  keepalive 16;
+}
+
+# HTTP → HTTPS
+server {
+  listen 80;
+  listen [::]:80;
+  server_name {{ nginx_cloud_domain }};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
+# HTTPS frontend
+server {
+  listen 443 ssl;
+  listen [::]:443 ssl;
+  http2 on;
+  server_name {{ nginx_cloud_domain }};
+
+  ssl_certificate     /etc/letsencrypt/live/{{ nginx_cloud_domain }}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/{{ nginx_cloud_domain }}/privkey.pem;
+  include             /etc/letsencrypt/options-ssl-nginx.conf;
+  ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+{% if nginx_cloud_hsts %}
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+{% endif %}
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "SAMEORIGIN" always;
+  add_header Referrer-Policy "no-referrer" always;
+  add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+  client_max_body_size {{ nginx_cloud_max_body }};
+
+  access_log {{ nginx_cloud_access_log }};
+  error_log  {{ nginx_cloud_error_log }} warn;
+
+  limit_req zone=cloud_req burst={{ nginx_cloud_rate_limit_burst }} nodelay;
+
+  location / {
+    proxy_pass         http://filebrowser_public_upstream;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout    {{ nginx_cloud_proxy_read_timeout }};
+    proxy_send_timeout    {{ nginx_cloud_proxy_send_timeout }};
+    proxy_connect_timeout {{ nginx_cloud_proxy_connect_timeout }};
+
+    proxy_buffering         off;
+    proxy_request_buffering off;
+  }
+}

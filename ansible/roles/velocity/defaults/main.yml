@@ -1,0 +1,51 @@
+# Velocity role defaults
+
+# Enable/disable whole role
+velocity_enabled: true
+
+# System user/group
+velocity_user: velocity
+velocity_group: velocity
+velocity_uid: 1105
+velocity_gid: 1105
+velocity_home: /opt/velocity
+velocity_service_name: velocity
+
+# Java & memory
+velocity_java_pkg: openjdk-21-jre-headless
+velocity_min_memory: 512M
+velocity_max_memory: 1500M
+
+# Bind publicly on the VPS (players connect here)
+velocity_host: "0.0.0.0"
+velocity_port: 25565
+
+# Backend (Paper on Tresor via WireGuard)
+paper_backend_host: "10.66.66.2"
+paper_backend_port: 25565
+
+# Timezone & MOTD
+velocity_tz: "UTC"
+velocity_motd: "Velocity proxy, you are being routed through Germany"
+velocity_show_ping_requests: true
+velocity_player_limit: 50
+velocity_compression_level: 1
+
+# Forwarding
+velocity_forwarding_mode: "modern"  # 'modern' or 'none'
+# Provide via Ansible Vault:
+#   vault_velocity_forwarding_secret: "supersecret"
+velocity_forwarding_secret: "{{ vault_velocity_forwarding_secret }}"
+
+# JAR (pin a real URL + optional sha256)
+velocity_jar_url: "https://api.papermc.io/v2/projects/velocity/versions/3.4.0-SNAPSHOT/builds/559/downloads/velocity-3.4.0-SNAPSHOT-559.jar"
+velocity_download_checksum: "sha256:ccc49f71751ece26568d3476392d6130c8b43f2e5f3a88313325b9278a52babd"
+velocity_jar: "{{ velocity_home }}/velocity.jar"
+
+# Firewall management on VPS (opens TCP 25565)
+velocity_manage_firewall: true
+
+# Manage servers.toml from this role (recommended)
+velocity_manage_servers: true
+# Name of the main backend in servers.toml
+velocity_backend_name: "paper"

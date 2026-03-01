@@ -1,0 +1,145 @@
+---
+# NOTE: Kiwix backup excludes .zim files. After restore, re-sync the ZIM:
+#   ansible-playbook playbooks/kiwix/deploy.yml -e kiwix_sync_enabled=true
+- name: "Restore kiwix — validate, wipe, extract, redeploy"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/kiwix"
+    data_dir: "/mnt/ssd/services/kiwix"
+    tar_base: "/mnt/ssd/services"
+    tar_dir: "kiwix"
+    container_name: "kiwix"
+    restore_owner: "root"
+    restore_group: "root"
+    confirm_restore: "no"
+
+  tasks:
+
+    - name: Find latest backup
+      ansible.builtin.shell: |
+        ls -1t {{ backup_dir }}/kiwix-backup-*.tar.gz 2>/dev/null | head -1
+      register: _latest
+      changed_when: false
+      when: backup_file is not defined
+
+    - name: Set backup path
+      ansible.builtin.set_fact:
+        _restore_file: "{{ backup_file | default(_latest.stdout | default('')) }}"
+
+    - name: Fail if no backup found
+      ansible.builtin.fail:
+        msg: "No backup found in {{ backup_dir }}"
+      when: _restore_file | length == 0
+
+    - name: Stat the backup file
+      ansible.builtin.stat:
+        path: "{{ _restore_file }}"
+      register: _backup_stat
+
+    - name: Fail if backup file doesn't exist
+      ansible.builtin.fail:
+        msg: "Backup file not found: {{ _restore_file }}"
+      when: not _backup_stat.stat.exists
+
+    - name: Verify tarball structure
+      ansible.builtin.shell: |
+        tar -tzf "{{ _restore_file }}" | head -5
+      register: _tar_list
+      changed_when: false
+
+    - name: Fail if tarball structure wrong
+      ansible.builtin.fail:
+        msg: "Tarball doesn't contain {{ tar_dir }}/. Got: {{ _tar_list.stdout_lines[:5] }}"
+      when: _tar_list.stdout_lines | select('match', '^' ~ tar_dir ~ '/') | list | length == 0
+
+    - name: Show restore plan
+      ansible.builtin.debug:
+        msg:
+          backup: "{{ _restore_file | basename }}"
+          size_mb: "{{ (_backup_stat.stat.size / 1048576) | round(1) }}"
+
+    - name: "⚠️  Confirm restore"
+      ansible.builtin.pause:
+        prompt: |
+          Restoring kiwix from {{ _restore_file | basename }}
+          This will WIPE {{ data_dir }} and redeploy. Type 'yes' to proceed
+          NOTE: .zim files are NOT in the backup — re-sync after with kiwix_sync_enabled=true
+      register: _confirm
+      when: confirm_restore | lower != 'yes'
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Restore aborted."
+      when:
+        - confirm_restore | lower != 'yes'
+        - _confirm.user_input | default('') | lower != 'yes'
+
+    - name: Check if data dir exists
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: _data_dir
+
+    - name: Pre-restore safety snapshot
+      ansible.builtin.shell: |
+        DATE=$(date +%d%m%Y-%H%M)
+        tar -czf "{{ backup_dir }}/pre-restore-kiwix-backup-$DATE.tar.gz" \
+          --exclude='*.zim' \
+          -C {{ tar_base }} {{ tar_dir }}
+      when: _data_dir.stat.exists | default(false)
+
+    - name: Stop container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+        stop_timeout: 30
+      failed_when: false
+
+    - name: Remove container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+        force_kill: true
+      failed_when: false
+
+    - name: Wipe data directory (preserving .zim if present)
+      ansible.builtin.shell: |
+        find {{ data_dir }} -mindepth 1 ! -name '*.zim' -delete 2>/dev/null || true
+      when: _data_dir.stat.exists | default(false)
+
+    - name: Ensure parent directory exists
+      ansible.builtin.file:
+        path: "{{ tar_base }}"
+        state: directory
+        mode: '0755'
+
+    - name: Extract backup
+      ansible.builtin.shell: |
+        tar -xzf "{{ _restore_file }}" -C {{ tar_base }}
+
+    - name: Verify restored
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: _restored
+
+    - name: Fail if extraction failed
+      ansible.builtin.fail:
+        msg: "Extraction didn't produce {{ data_dir }}."
+      when: not _restored.stat.exists
+
+    - name: Fix ownership
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: directory
+        owner: "{{ restore_owner }}"
+        group: "{{ restore_group }}"
+        recurse: true
+
+    - name: "⚠️  Reminder"
+      ansible.builtin.debug:
+        msg: "Backup excludes .zim — re-sync with: ansible-playbook playbooks/kiwix/deploy.yml -e kiwix_sync_enabled=true"
+
+- name: "Restore kiwix — redeploy"
+  import_playbook: deploy.yml

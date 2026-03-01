@@ -1,0 +1,207 @@
+---
+# roles/docker-firewall/tasks/main.yml
+#
+# Manages:
+#   1. DOCKER-USER chain (edge-case rules for containers)
+#   2. INPUT chain hygiene (SSH + extras)
+#   3. Cleanup of orphaned UFW chains and stale rules
+#   4. Persistence via iptables-persistent
+#
+# Does NOT manage:
+#   - Docker's own chains (DOCKER, DOCKER-FORWARD, DOCKER-ISOLATION-*)
+#   - NAT/MASQUERADE (Docker handles this)
+#   - Bind addresses (that's in each service's compose template)
+
+- name: Install iptables-persistent
+  ansible.builtin.apt:
+    name:
+      - iptables
+      - iptables-persistent
+      - netfilter-persistent
+    state: present
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: firewall_persist | bool
+  tags: [firewall, firewall:install]
+
+# ── Cleanup orphaned UFW artefacts ──────────────────────────
+
+- name: Check for orphaned UFW chains
+  ansible.builtin.shell: |
+    iptables -S | grep -c 'ufw-' || true
+  register: _ufw_chain_count
+  changed_when: false
+  tags: [firewall, firewall:cleanup]
+
+- name: Remove UFW rules from INPUT chain
+  ansible.builtin.shell: |
+    while iptables -S INPUT | grep -q 'ufw-'; do
+      RULE_NUM=$(iptables -L INPUT --line-numbers -n | grep 'ufw-' | head -1 | awk '{print $1}')
+      [ -z "$RULE_NUM" ] && break
+      iptables -D INPUT "$RULE_NUM"
+    done
+  when: _ufw_chain_count.stdout | int > 0
+  changed_when: true
+  tags: [firewall, firewall:cleanup]
+
+- name: Remove UFW rules from FORWARD chain
+  ansible.builtin.shell: |
+    while iptables -S FORWARD | grep -q 'ufw-'; do
+      RULE_NUM=$(iptables -L FORWARD --line-numbers -n | grep 'ufw-' | head -1 | awk '{print $1}')
+      [ -z "$RULE_NUM" ] && break
+      iptables -D FORWARD "$RULE_NUM"
+    done
+  when: _ufw_chain_count.stdout | int > 0
+  changed_when: true
+  tags: [firewall, firewall:cleanup]
+
+- name: Flush and delete orphaned UFW chains
+  ansible.builtin.shell: |
+    for chain in $(iptables -S | grep '^-N ufw-' | awk '{print $2}'); do
+      iptables -F "$chain" 2>/dev/null || true
+      iptables -X "$chain" 2>/dev/null || true
+    done
+  when: _ufw_chain_count.stdout | int > 0
+  changed_when: true
+  tags: [firewall, firewall:cleanup]
+
+# ── Cleanup stale NAT rules ────────────────────────────────
+
+- name: Remove stale mc_pub MASQUERADE rules
+  ansible.builtin.shell: |
+    while iptables -t nat -S POSTROUTING | grep -q 'br-mc_pub'; do
+      RULE_NUM=$(iptables -t nat -L POSTROUTING --line-numbers -n | grep 'br-mc_pub' | tail -1 | awk '{print $1}')
+      [ -z "$RULE_NUM" ] && break
+      iptables -t nat -D POSTROUTING "$RULE_NUM"
+    done
+  changed_when: true
+  tags: [firewall, firewall:cleanup]
+
+- name: Remove stale bridge MASQUERADE rules
+  ansible.builtin.shell: |
+    for br in br-lan_pub br-mc_net; do
+      if ! ip link show "$br" &>/dev/null; then
+        while iptables -t nat -S POSTROUTING | grep -q "$br"; do
+          RULE_NUM=$(iptables -t nat -L POSTROUTING --line-numbers -n | grep "$br" | tail -1 | awk '{print $1}')
+          [ -z "$RULE_NUM" ] && break
+          iptables -t nat -D POSTROUTING "$RULE_NUM"
+        done
+      fi
+    done
+  changed_when: false
+  tags: [firewall, firewall:cleanup]
+
+# ── Remove duplicate INPUT rules ───────────────────────────
+
+- name: Remove duplicate INPUT rules
+  ansible.builtin.shell: |
+    while true; do
+      RULE_NUM=$(iptables -L INPUT --line-numbers -n | awk '
+        NR > 2 {
+          num = $1
+          $1 = ""
+          sub(/^ +/, "", $0)
+          seen[$0]++
+          if (seen[$0] > 1) { print num; exit }
+        }
+      ')
+      [ -z "$RULE_NUM" ] && break
+      iptables -D INPUT "$RULE_NUM"
+    done
+  changed_when: false
+  tags: [firewall, firewall:cleanup]
+
+# ── INPUT chain ─────────────────────────────────────────────
+
+- name: Ensure INPUT default policy is DROP
+  ansible.builtin.iptables:
+    chain: INPUT
+    policy: DROP
+  tags: [firewall, firewall:input]
+
+- name: Allow established/related connections
+  ansible.builtin.iptables:
+    chain: INPUT
+    ctstate: ESTABLISHED,RELATED
+    jump: ACCEPT
+    comment: "Allow established connections"
+  tags: [firewall, firewall:input]
+
+- name: Allow loopback
+  ansible.builtin.iptables:
+    chain: INPUT
+    in_interface: lo
+    jump: ACCEPT
+    comment: "Allow loopback"
+  tags: [firewall, firewall:input]
+
+- name: Allow SSH
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: "{{ ssh_port | default(22) }}"
+    jump: ACCEPT
+    comment: "SSH"
+  tags: [firewall, firewall:input]
+
+- name: Allow ICMP (ping)
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: icmp
+    jump: ACCEPT
+    comment: "ICMP"
+  tags: [firewall, firewall:input]
+
+- name: Apply extra INPUT rules
+  ansible.builtin.iptables:
+    chain: INPUT
+    protocol: "{{ item.proto | default('tcp') }}"
+    source: "{{ item.src | default(omit) }}"
+    destination_port: "{{ item.port }}"
+    jump: "{{ item.action | default('ACCEPT') }}"
+    comment: "{{ item.comment | default(omit) }}"
+  loop: "{{ input_extra_rules }}"
+  tags: [firewall, firewall:input]
+
+# ── DOCKER-USER chain ───────────────────────────────────────
+
+- name: Collect DOCKER-USER rules from service definitions
+  ansible.builtin.set_fact:
+    _docker_user_rules: >-
+      {{ tresor_services | dict2items
+         | selectattr('value.docker_user_rules', 'defined')
+         | map(attribute='value.docker_user_rules')
+         | flatten }}
+  tags: [firewall, firewall:docker]
+
+- name: Flush DOCKER-USER chain
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    flush: true
+  tags: [firewall, firewall:docker]
+
+- name: Apply DOCKER-USER rules
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    protocol: "{{ item.proto }}"
+    source: "{{ item.src | default(omit) }}"
+    destination_port: "{{ item.dport | string }}"
+    jump: "{{ item.action }}"
+    comment: "{{ item.comment | default(omit) }}"
+  loop: "{{ _docker_user_rules }}"
+  tags: [firewall, firewall:docker]
+
+- name: DOCKER-USER default RETURN
+  ansible.builtin.iptables:
+    chain: DOCKER-USER
+    jump: RETURN
+    comment: "Default return"
+  tags: [firewall, firewall:docker]
+
+# ── Persist ─────────────────────────────────────────────────
+
+- name: Save iptables rules
+  ansible.builtin.command: netfilter-persistent save
+  when: firewall_persist | bool
+  changed_when: true
+  tags: [firewall, firewall:persist]

@@ -1,0 +1,38 @@
+---
+# ── filebrowser-public (cloud.example.com — friends 1TB file drop) ───────────
+# Completely separate container, DB, and data root from your personal filebrowser.
+# Serves /mnt/data/cloud only — sibling to /mnt/data/data, no overlap.
+#
+# Routing:  internet → cloud.example.com
+#           → tresor-vps: nginx (same instance as music.example.com)
+#           → WireGuard (10.66.66.1 → 10.66.66.2:8082)
+#           → filebrowser-public container
+#           → /mnt/data/cloud  (rw)
+
+# Data root — only this dir is mounted into the container
+filebrowser_public_root_dir: "/mnt/data/cloud"
+
+# Config + DB on SSD (small, fast, backed up separately)
+filebrowser_public_config_dir:  "/mnt/ssd/configs/filebrowser-public"
+filebrowser_public_db_dir:      "/mnt/ssd/configs/filebrowser-public/db"
+
+# WG-bound host publish; container attaches to public_net, no LAN bind
+filebrowser_public_network:     "public_net"
+
+# Bind to WG IP — only the VPS peer (10.66.66.1) can reach this port
+filebrowser_public_bind_addr:   "10.66.66.2"
+filebrowser_public_listen_port: 8082
+
+# UID/GID — same as your other services (admin / mediausers)
+filebrowser_public_uid: 1000
+filebrowser_public_gid: 1000
+
+# Credentials (vault-encrypted)
+filebrowser_public_admin_user: "admin"
+filebrowser_public_admin_pass: "{{ vault_filebrowser_public_admin_pass }}"
+
+# Image — same pinned image as personal filebrowser
+filebrowser_public_image: "{{ tresor_versions.filebrowser_image }}"
+
+# true → role creates /mnt/data/cloud if missing (safe — new folder on existing HDD)
+filebrowser_public_create_root_dir: true

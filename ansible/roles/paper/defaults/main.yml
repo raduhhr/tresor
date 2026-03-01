@@ -1,0 +1,27 @@
+# Image — must be set via group_vars/prod → tresor_versions.minecraft_server_image
+paper_image: ""
+# Version — must be set via group_vars/prod → tresor_versions.minecraft_server_version
+paper_version: ""
+
+# Container identity
+paper_container: "paper"
+
+# Paths & ownership  override per env if needed
+paper_uid: 1000
+paper_gid: 1000
+
+# Runtime
+paper_memory: "8G"
+paper_tz: "UTC"
+
+# Gameplay/security
+paper_online_mode: "false"            # cracked allowed
+paper_whitelist: "true"
+
+# Networking
+mc_net: "mc_net"                      # internal: true
+
+# Deploy semantics
+paper_deploy_restart_policy: "no"     # deploy keeps it off
+paper_apply_live: false               # if true, templates notify restart (only if running)
+

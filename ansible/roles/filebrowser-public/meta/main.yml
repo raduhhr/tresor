@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  author: admin
+  description: >
+    Public filebrowser for friends at cloud.example.com. Serves /mnt/data/cloud
+    only. Exposed via WireGuard → VPS nginx (nginx-music role, cloud.conf vhost).
+    Completely isolated from the personal filebrowser container.
+  min_ansible_version: "2.14"
+dependencies: []

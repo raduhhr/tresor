@@ -1,0 +1,44 @@
+---
+# playbooks/infra/verify-wireguard.yml
+- name: Verify WireGuard client on Tresor
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Ensure wg0 service is running
+      ansible.builtin.systemd:
+        name: "wg-quick@wg0"
+        state: started
+      register: _svc
+
+    - name: Show wg quick status
+      ansible.builtin.command: "wg show"
+      register: _wg
+      changed_when: false
+
+    - name: Parse latest handshake line
+      ansible.builtin.set_fact:
+        wg_latest_handshake: "{{ _wg.stdout | regex_search('latest handshake:.*', multiline=True) | default('no-handshake') }}"
+
+    - name: Extract bind IP from role’s cached fact (set by wireguard-client role)
+      ansible.builtin.set_fact:
+        wg_bind_ip: "{{ hostvars[inventory_hostname].wg_ip | default(hostvars[inventory_hostname].wg_bind_ip | default('10.66.66.2')) }}"
+
+    - name: Show summary
+      ansible.builtin.debug:
+        msg:
+          service_changed: "{{ _svc is changed }}"
+          latest_handshake: "{{ wg_latest_handshake }}"
+          wg_bind_ip: "{{ wg_bind_ip }}"
+          tip: "Paper should publish on {{ wg_bind_ip }}:25565 only."
+
+    - name: Check if port 25565 is listening on WG IP (optional if Paper is running)
+      ansible.builtin.command: "ss -tnlp | grep '{{ wg_bind_ip }}:25565'"
+      register: _ss
+      failed_when: false
+      changed_when: false
+
+    - name: Print port check result
+      ansible.builtin.debug:
+        msg: "{{ _ss.stdout | default('Paper not started yet or not bound to WG IP.') }}"

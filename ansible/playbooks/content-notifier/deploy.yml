@@ -1,0 +1,14 @@
+---
+- name: Deploy content-notifier (Discord webhook on new media folders)
+  hosts: prod
+  become: true
+  gather_facts: true
+
+
+  vars:
+    content_notifier_webhook_url: "{{ vault_content_notifier_webhook_url }}"
+    # Set to true manually on first deploy to bootstrap ACLs recursively
+    content_notifier_acl_bootstrap_recursive: false
+
+  roles:
+    - role: content-notifier

@@ -1,0 +1,11 @@
+---
+# Update Uptime Kuma: backup current state → deploy new version → verify health
+# Prerequisite: bump the version in group_vars/prod/versions.yml first
+- name: "Update Uptime Kuma — backup"
+  import_playbook: backup.yml
+
+- name: "Update Uptime Kuma — deploy"
+  import_playbook: deploy.yml
+
+- name: "Update Uptime Kuma — status"
+  import_playbook: status.yml

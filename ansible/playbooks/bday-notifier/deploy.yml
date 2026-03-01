@@ -1,0 +1,5 @@
+# playbooks/services/deploy-bday-notifier.yml
+- hosts: prod
+  become: true
+  roles:
+    - bday-notifier

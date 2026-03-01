@@ -1,0 +1,9 @@
+---
+- name: Remove Filebrowser container
+  hosts: tresor
+  become: true
+  tasks:
+    - community.docker.docker_container:
+        name: filebrowser
+        state: absent
+        force_kill: true

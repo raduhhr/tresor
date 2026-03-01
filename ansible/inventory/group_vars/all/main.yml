@@ -1,0 +1,78 @@
+# role inputs only (no connection vars)
+
+# --- Base OS ---
+base_timezone: UTC
+base_locale: en_US.UTF-8
+
+ssh_port: 22
+ssh_allow_users: [ansible, admin]
+# ssh_allow_cidrs is used by fail2ban ignoreip ONLY — it does NOT affect sshd AllowUsers.
+# SSH user access is controlled by ssh_allow_users above.
+ssh_allow_cidrs:
+  - 192.168.0.0/16
+  - 172.16.0.0/12
+  - 10.0.0.0/8
+
+base_ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+  - 2.pool.ntp.org
+
+base_groups: [mediausers, containers_rw]
+base_dirs:
+  - { path: "/mnt/ssd", owner: root, group: root, mode: "0755" }
+  - { path: "/mnt/ssd/configs", owner: root, group: root, mode: "0755" }
+  - { path: "/mnt/ssd/configs/traefik", owner: root, group: root, mode: "0755" }
+  - { path: "/mnt/ssd/configs/cloudflared", owner: root, group: root, mode: "0755" }
+
+# --- Docker ---
+docker_hold: true            # pin/hold daemon package if your role uses it
+docker_pkg_version: ""       # empty -> latest available
+docker_host_rootless: "unix:///run/user/{{ (ansible_env.SUDO_UID | default(ansible_user_uid)) }}/docker.sock"
+
+# Canonical Docker bridge definitions (consumed by setup-networks role)
+tresor_networks:
+  - { name: public_net,   internal: false, subnet: "172.30.0.0/24", gateway: "172.30.0.1" }
+  - { name: internal_net, internal: true,  subnet: "172.28.0.0/24", gateway: "172.28.0.1" }
+  - { name: mc_net,       internal: true,  subnet: "172.29.0.0/24", gateway: "172.29.0.1" }
+  - { name: lan_pub,      internal: false, subnet: "172.25.0.0/24", gateway: "172.25.0.1" }
+
+# --- Traefik (env-specific bind & dashboard set in qa.yml/prod.yml) ---
+traefik:
+  tz: "UTC"
+  domain: "example.com"
+  config_dir: "/mnt/ssd/configs/traefik"
+  log_level: "INFO"
+
+# Example env overrides:
+# qa.yml:
+#   traefik_bind_host: "127.0.0.1"
+#   traefik_bind_port: 8080
+#   traefik_dashboard_mode: "local"
+# prod.yml:
+#   traefik_dashboard_mode: "off"
+
+traefik_basic_auth_users:
+  - "{{ vault_traefik_htpasswd_userline }}"
+
+# --- Cloudflared (defaults) ---
+# IMPORTANT: Ansible merges lists but REPLACES dicts entirely.
+# Any group-level cloudflared: dict (e.g. prod/main.yml) replaces this whole dict.
+# Group overrides MUST include all required keys (network, tz, enable_metrics, etc.)
+# or those fields will be silently undefined.
+# Use token-mode in PROD (set enabled+token there). Keep disabled in QA.
+cloudflared:
+  network: "public_net"        # same net as Traefik
+  tz: "UTC"
+  enable_metrics: true
+  metrics_port: 8086
+
+  # Velocity forwarding (shared between VPS Velocity and Tresor Paper)
+velocity_forwarding_secret: "{{ vault_velocity_forwarding_secret }}"
+
+
+
+
+
+
+

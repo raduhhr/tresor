@@ -1,0 +1,22 @@
+---
+# defaults for roles/filebrowser-public
+# Production values live in inventory/group_vars/prod/filebrowser-public.yml
+
+filebrowser_public_root_dir:    "/mnt/data/cloud"
+filebrowser_public_config_dir:  "/mnt/ssd/configs/filebrowser-public"
+filebrowser_public_db_dir:      "/mnt/ssd/configs/filebrowser-public/db"
+
+filebrowser_public_network:     "public_net"
+filebrowser_public_bind_addr:   "10.66.66.2"
+filebrowser_public_listen_port: 8082
+
+filebrowser_public_uid: 1000
+filebrowser_public_gid: 1000
+
+filebrowser_public_admin_user: "admin"
+filebrowser_public_admin_pass: "changeme"
+
+# Override in group_vars/prod/main.yml via tresor_versions.filebrowser_image
+filebrowser_public_image: "filebrowser/filebrowser:v2.59.0"  # fallback; prod overrides via tresor_versions
+
+filebrowser_public_create_root_dir: true

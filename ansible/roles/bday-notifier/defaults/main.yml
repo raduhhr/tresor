@@ -1,0 +1,43 @@
+---
+# === Paths ===
+bday_notifier_config_dir: "/mnt/ssd/configs/bday-notifier"
+bday_notifier_state_dir: "{{ bday_notifier_config_dir }}/state"
+
+bday_notifier_app_dir: "/opt/bday-notifier"
+bday_notifier_script_path: "{{ bday_notifier_app_dir }}/bday_notifier.py"
+
+bday_notifier_wrapper_path: "/usr/local/bin/bday-notifier-run"
+bday_notifier_env_path: "/etc/bday-notifier.env"
+
+bday_notifier_cfg_path: "{{ bday_notifier_config_dir }}/birthdays.yml"
+bday_notifier_log_path: "{{ bday_notifier_state_dir }}/bday-notifier.log"
+
+
+# === Runtime ===
+# RISK: running as the ansible user means a script compromise grants full sudo.
+# Recommended fix: create a dedicated low-privilege user (no sudo, no shell) and
+# set bday_notifier_run_user/group to that user before running in production.
+bday_notifier_run_user: "ansible"
+bday_notifier_run_group: "ansible"
+
+# === Schedule ===
+# run 3 times/day for redundancy
+bday_notifier_cron_times: "0 0,8,16 * * *"
+
+# === Logic ===
+bday_notifier_timezone: "UTC"
+
+bday_notifier_people: []
+# example:
+# bday_notifier_people:
+#   - name: Ana
+#     date: "1998-03-14"
+
+bday_notifier_webhook_envs:
+  - "BDAY_DISCORD_WEBHOOK_PRIVATE"
+  - "BDAY_DISCORD_WEBHOOK_TRESOR"
+
+# === Logging ===
+bday_notifier_logrotate_enabled: true
+bday_notifier_logrotate_rotate: 8
+bday_notifier_logrotate_frequency: "weekly"

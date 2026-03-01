@@ -1,0 +1,47 @@
+---
+- name: "Grafana status (graceful check with HTTP probe)"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    container_name: grafana
+    grafana_host: "{{ grafana_bind_addr | default('127.0.0.1') }}"
+    grafana_port: "{{ grafana_host_port | default(3000) }}"
+    grafana_enabled: true
+
+  tasks:
+    - name: Gather container info
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _ci
+      changed_when: false
+
+    - name: Note when Grafana is disabled
+      ansible.builtin.debug:
+        msg: "Grafana is disabled for this host; skipping runtime checks."
+      when: not grafana_enabled
+
+    - name: Assert container absent when disabled
+      ansible.builtin.assert:
+        that:
+          - not _ci.exists
+        fail_msg: "Grafana is disabled but the container exists."
+      when: not grafana_enabled
+
+    - name: Assert container is running
+      ansible.builtin.assert:
+        that:
+          - _ci.exists
+          - _ci.container.State.Running
+          - _ci.container.State.ExitCode == 0
+        fail_msg: "Grafana container not healthy or not running."
+      when: grafana_enabled
+
+    - name: Probe Grafana API health
+      ansible.builtin.uri:
+        url: "http://{{ grafana_host }}:{{ grafana_port }}/api/health"
+        status_code: 200
+        return_content: false
+      changed_when: false
+      when: grafana_enabled

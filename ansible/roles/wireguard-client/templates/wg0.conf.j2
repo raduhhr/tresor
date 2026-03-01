@@ -1,0 +1,31 @@
+# Managed by Ansible - wireguard-client
+[Interface]
+Address = {{ wg_address }}
+PrivateKey = {{ wg_private_key | trim }}
+{% if wg_mtu is not none -%}
+MTU = {{ wg_mtu }}
+{% endif -%}
+{% if wg_table is not none -%}
+Table = {{ wg_table }}
+{% endif -%}
+SaveConfig = false
+{% if wg_dns and wg_dns | length > 0 -%}
+DNS = {{ wg_dns | join(', ') }}
+{% endif %}
+
+{% for p in wg_peers -%}
+[Peer]
+# {{ p.name | default('peer') }}
+PublicKey = {{ p.public_key }}
+{% if p.preshared_key is defined and p.preshared_key | length > 0 -%}
+PresharedKey = {{ p.preshared_key }}
+{% endif -%}
+{% if p.endpoint | default('') -%}
+Endpoint = {{ p.endpoint }}
+{% endif -%}
+AllowedIPs = {{ p.allowed_ips | join(', ') }}
+{% if p.persistent_keepalive | default(0) -%}
+PersistentKeepalive = {{ p.persistent_keepalive }}
+{% endif %}
+
+{% endfor -%}

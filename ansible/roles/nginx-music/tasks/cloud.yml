@@ -1,0 +1,118 @@
+---
+# cloud.yml — adds the cloud.example.com vhost to the existing nginx instance.
+# Called via: include_role: name: nginx-music tasks_from: cloud
+
+# ── Step 1: Inject rate-limiting zones into nginx.conf (above includes) ───────
+
+- name: "[cloud] Deploy nginx.conf with cloud rate-limiting zones"
+  become: true
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    mode: "0644"
+    backup: true
+
+# ── Step 2: Always write clean bootstrap ──────────────────────────────────────
+
+- name: "[cloud] Stat LE cert for {{ nginx_cloud_domain }}"
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ nginx_cloud_domain }}/fullchain.pem"
+  register: _cloud_cert
+
+- name: "[cloud] Render HTTP bootstrap config"
+  become: true
+  ansible.builtin.template:
+    src: cloud.http.nginx.j2
+    dest: /etc/nginx/sites-available/cloud.conf
+    mode: "0644"
+
+- name: "[cloud] Enable cloud vhost symlink"
+  become: true
+  ansible.builtin.file:
+    src:  /etc/nginx/sites-available/cloud.conf
+    dest: /etc/nginx/sites-enabled/cloud.conf
+    state: link
+
+- name: "[cloud] nginx -t (bootstrap)"
+  become: true
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: "[cloud] Reload nginx (bootstrap live)"
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+
+# ── Step 3: Issue LE cert ─────────────────────────────────────────────────────
+
+- name: "[cloud] Resolve ACME email"
+  ansible.builtin.set_fact:
+    _cloud_acme_email: >-
+      {{
+        (nginx_music_acme_email | default(''))
+        if (nginx_music_acme_email | default('') | length > 0
+            and nginx_music_acme_email | default('') != 'you@domain.tld')
+        else (vault_acme_email | default(''))
+      }}
+
+- name: "[cloud] Assert ACME email is set"
+  ansible.builtin.assert:
+    that: _cloud_acme_email | length > 0
+    fail_msg: >-
+      No ACME email found. Set vault_acme_email in inventory/group_vars/vps/main.yml.
+
+- name: "[cloud] Obtain LE cert via certbot (webroot — never touches cloud.conf)"
+  become: true
+  ansible.builtin.command: >
+    certbot certonly
+    --webroot
+    --webroot-path /var/www/html
+    -d {{ nginx_cloud_domain }}
+    --agree-tos
+    --email {{ _cloud_acme_email }}
+    --non-interactive
+  register: _cloud_certbot
+  when: not _cloud_cert.stat.exists
+  failed_when: _cloud_certbot.rc | default(0) != 0
+  changed_when: _cloud_certbot.rc | default(1) == 0
+
+- name: "[cloud] Show certbot stderr on failure"
+  ansible.builtin.debug:
+    msg: "{{ _cloud_certbot.stderr | default('(no output)') }}"
+  when:
+    - not _cloud_cert.stat.exists
+    - _cloud_certbot.rc | default(0) != 0
+
+# ── Step 4: TLS production config ─────────────────────────────────────────────
+
+- name: "[cloud] Re-stat cert after certbot"
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ nginx_cloud_domain }}/fullchain.pem"
+  register: _cloud_cert_after
+
+- name: "[cloud] Assert cert exists before rendering TLS config"
+  ansible.builtin.assert:
+    that: _cloud_cert_after.stat.exists | bool
+    fail_msg: >-
+      LE cert for {{ nginx_cloud_domain }} still missing after certbot run.
+
+- name: "[cloud] Render TLS production config"
+  become: true
+  ansible.builtin.template:
+    src: cloud.tls.nginx.j2
+    dest: /etc/nginx/sites-available/cloud.conf
+    mode: "0644"
+
+- name: "[cloud] nginx -t (TLS)"
+  become: true
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: "[cloud] Reload nginx (TLS config live)"
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded

@@ -1,0 +1,184 @@
+---
+# tasks file for roles/filebrowser-public
+# Friends 1TB drop at cloud.example.com.
+# Bound to WG IP 10.66.66.2:8082 — no LAN exposure.
+# Serves /mnt/data/cloud only; cannot see /mnt/data/data.
+
+# =========================================
+# 1) Directories
+# =========================================
+- name: Ensure filebrowser-public config dir exists
+  ansible.builtin.file:
+    path: "{{ filebrowser_public_config_dir }}"
+    state: directory
+    owner: "{{ filebrowser_public_uid }}"
+    group: "{{ filebrowser_public_gid }}"
+    mode: "0755"
+    recurse: true
+  become: true
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Ensure filebrowser-public DB dir exists
+  ansible.builtin.file:
+    path: "{{ filebrowser_public_db_dir }}"
+    state: directory
+    owner: "{{ filebrowser_public_uid }}"
+    group: "{{ filebrowser_public_gid }}"
+    mode: "0755"
+  become: true
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Stat cloud data root dir
+  ansible.builtin.stat:
+    path: "{{ filebrowser_public_root_dir }}"
+  register: _fbpub_root_stat
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Create cloud data root dir (only if missing and create_root_dir is true)
+  ansible.builtin.file:
+    path: "{{ filebrowser_public_root_dir }}"
+    state: directory
+    owner: "{{ filebrowser_public_uid }}"
+    group: "{{ filebrowser_public_gid }}"
+    mode: "0755"
+  when:
+    - filebrowser_public_create_root_dir | bool
+    - not _fbpub_root_stat.stat.exists
+  become: true
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Assert cloud data root dir exists
+  ansible.builtin.assert:
+    that: _fbpub_root_stat.stat.exists or (filebrowser_public_create_root_dir | bool)
+    fail_msg: >-
+      filebrowser_public_root_dir '{{ filebrowser_public_root_dir }}' does not exist.
+      Create it manually or set filebrowser_public_create_root_dir: true.
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+# =========================================
+# 2) Docker network pre-flight
+# =========================================
+- name: Gather info for Docker network {{ filebrowser_public_network }}
+  community.docker.docker_network_info:
+    name: "{{ filebrowser_public_network }}"
+  register: _fbpub_net_info
+  tags: [filebrowser-public, filebrowser-public:networks]
+
+- name: Fail if Docker network {{ filebrowser_public_network }} is missing
+  ansible.builtin.fail:
+    msg: >-
+      Docker network '{{ filebrowser_public_network }}' not found.
+      Run playbooks/infra/setup-networks.yml first.
+  when: not (_fbpub_net_info.exists | default(false))
+  tags: [filebrowser-public, filebrowser-public:networks]
+
+# =========================================
+# 3) Build volumes
+# =========================================
+- name: Compose filebrowser-public volumes
+  ansible.builtin.set_fact:
+    _fbpub_volumes:
+      - "{{ filebrowser_public_db_dir }}:/database"
+      - "{{ filebrowser_public_config_dir }}:/config"
+      - "{{ filebrowser_public_root_dir }}:/srv"
+  tags: [filebrowser-public, filebrowser-public:volumes]
+
+# =========================================
+# 4) Bootstrap admin user (idempotent)
+# =========================================
+- name: Ensure filebrowser-public admin user present (update-or-create)
+  community.docker.docker_container:
+    name: filebrowser-public-admin-ensure
+    image: "{{ filebrowser_public_image }}"
+    auto_remove: true
+    state: started
+    user: "{{ filebrowser_public_uid }}:{{ filebrowser_public_gid }}"
+    volumes:
+      - "{{ filebrowser_public_db_dir }}:/database"
+    command:
+      - sh
+      - -lc
+      - |
+        set -e
+        if filebrowser -d /database/filebrowser.db users update \
+             "{{ filebrowser_public_admin_user }}" \
+             --password "{{ filebrowser_public_admin_pass }}"; then
+          exit 0
+        fi
+        if filebrowser -d /database/filebrowser.db users add \
+             "{{ filebrowser_public_admin_user }}" \
+             "{{ filebrowser_public_admin_pass }}" --perm.admin; then
+          exit 0
+        fi
+        filebrowser -d /database/filebrowser.db users ls 2>/dev/null \
+          | awk 'NR>1{print $2}' \
+          | grep -Fx "{{ filebrowser_public_admin_user }}" && exit 0
+        echo "Could not ensure admin user" >&2
+        exit 1
+  register: _fbpub_admin_ensure
+  changed_when: true
+  no_log: true
+  tags: [filebrowser-public, filebrowser-public:bootstrap]
+
+# =========================================
+# 5) Port check (first run only)
+# =========================================
+- name: Check if filebrowser-public container already exists
+  community.docker.docker_container_info:
+    name: filebrowser-public
+  register: _fbpub_info
+  failed_when: false
+  changed_when: false
+  tags: [filebrowser-public, filebrowser-public:ports]
+
+- name: Ensure port {{ filebrowser_public_listen_port }} is free (first run only)
+  ansible.builtin.shell: >
+    ss -tln | awk '$4 ~ /:{{ filebrowser_public_listen_port }}$/ { print }' | wc -l
+  register: _fbpub_pcheck
+  changed_when: false
+  failed_when: false
+  when: >
+    not (_fbpub_info.exists | default(false))
+    or not (_fbpub_info.container.State.Running | default(false))
+  tags: [filebrowser-public, filebrowser-public:ports]
+
+- name: Fail if port {{ filebrowser_public_listen_port }} is already bound
+  ansible.builtin.assert:
+    that: "{{ (_fbpub_pcheck.stdout | default('0')) | int == 0 }}"
+    fail_msg: "Port {{ filebrowser_public_listen_port }} is already in use on the host."
+  when: >
+    not (_fbpub_info.exists | default(false))
+    or not (_fbpub_info.container.State.Running | default(false))
+  tags: [filebrowser-public, filebrowser-public:ports]
+
+# =========================================
+# 6) Run container (WG IP only, no LAN)
+# =========================================
+- name: Run filebrowser-public container
+  community.docker.docker_container:
+    name: filebrowser-public
+    image: "{{ filebrowser_public_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ filebrowser_public_network }}"
+    user: "{{ filebrowser_public_uid }}:{{ filebrowser_public_gid }}"
+    published_ports:
+      - "{{ filebrowser_public_bind_addr }}:{{ filebrowser_public_listen_port }}:80"
+    volumes: "{{ _fbpub_volumes }}"
+    command:
+      - "--database"
+      - "/database/filebrowser.db"
+      - "--config"
+      - "/config/settings.json"
+      - "--root"
+      - "/srv"
+    tty: false
+    state: started
+    healthcheck:
+      test: ["CMD", "sh", "-lc", "wget --spider -q 127.0.0.1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+  tags: [filebrowser-public, filebrowser-public:run]

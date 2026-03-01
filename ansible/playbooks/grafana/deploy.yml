@@ -1,0 +1,23 @@
+---
+- name: Deploy Grafana (monitoring dashboard)
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Ensure required Docker networks exist
+      community.docker.docker_network:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - internal_net
+        - lan_pub
+
+  roles:
+    - role: grafana
+
+  post_tasks:
+    - name: Run verification tasks
+      ansible.builtin.include_role:
+        name: grafana
+        tasks_from: verify

@@ -1,0 +1,10 @@
+---
+- name: Remove uptime-kuma container
+  hosts: prod
+  become: true
+  tasks:
+    - name: Remove uptime-kuma container
+      community.docker.docker_container:
+        name: uptime-kuma
+        state: absent
+        force_kill: true

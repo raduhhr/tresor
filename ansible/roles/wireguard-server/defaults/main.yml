@@ -1,0 +1,40 @@
+# Interface
+wg_interface: "wg0"
+wg_address: "10.66.66.1/24"
+wg_listen_port: 51820
+wg_mtu: 1420            # set null to omit
+wg_table: "auto"        # or "off"
+wg_dns: []              # rarely needed server-side
+wg_subnet: "10.66.66.0/24"
+wg_allow_icmp: true 
+
+# Keys (prefer vault)
+wg_private_key: "{{ vault_vps_wireguard_private_key | default('') }}"
+wg_private_key_file: "/etc/wireguard/privatekey"
+
+# Accept peers (Tresor + others in future)
+# address is informational (your inventory already has per-peer address; not required by wg)
+wg_peers:
+  - name: "tresor"
+    public_key: "{{ vault_tresor_pub | default('') }}"
+    preshared_key: "{{ vault_wg_psk | default(omit) }}"
+    allowed_ips:
+      - "10.66.66.2/32"
+    # persistent_keepalive: 25   # usually set client-side; server-side is optional/omitted
+
+# Service behavior
+wg_enable: true
+wg_state: "started"
+
+# Security / Firewall
+wg_manage_ufw: true
+wg_allow_from_cidrs: []            # e.g., ["10.66.66.2/32"] for later TCP rules in other roles
+# DROP is correct when this host proxies at app layer (Velocity) and does not
+# IP-forward between networks. Set to ACCEPT only if kernel-level routing is needed.
+wg_ufw_forward_policy: "DROP"
+
+# System tweaks (forwarding generally not required for your point-to-point)
+wg_manage_sysctl: false
+sysctl_forward_keys:
+  - { name: "net.ipv4.ip_forward", value: 1 }
+  - { name: "net.ipv6.conf.all.forwarding", value: 1 }

@@ -1,0 +1,11 @@
+---
+# Update Jellyfin Music: backup current state → deploy new version → verify health
+# Prerequisite: bump the version in group_vars/prod/versions.yml first
+- name: "Update Jellyfin Music — backup"
+  import_playbook: backup.yml
+
+- name: "Update Jellyfin Music — deploy"
+  import_playbook: deploy.yml
+
+- name: "Update Jellyfin Music — status"
+  import_playbook: status.yml

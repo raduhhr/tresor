@@ -1,0 +1,30 @@
+---
+- name: Paper status (ports + networks)
+  hosts: tresor
+  become: true
+  gather_facts: false
+  vars:
+    paper_container: "paper"
+    wg_bind_ip: "{{ hostvars[inventory_hostname].wg_ip | default(hostvars[inventory_hostname].wg_bind_ip | default('10.66.66.2')) }}"
+  tasks:
+    - community.docker.docker_container_info:
+        name: "{{ paper_container }}"
+      register: _info
+      failed_when: false
+
+    - debug:
+        msg:
+          exists: "{{ _info.exists | default(false) }}"
+          state: "{{ _info.container.State.Status if (_info.exists|default(false)) else 'absent' }}"
+          ports: "{{ _info.container.HostConfig.PortBindings if (_info.exists|default(false)) else {} }}"
+          networks: >-
+            {{ _info.container.NetworkSettings.Networks.keys() | list if (_info.exists|default(false)) else [] }}
+
+    - name: Check that Paper is listening on WG IP (if running)
+      command: "ss -tnlp | grep '{{ wg_bind_ip }}:25565 '"
+      register: _ss
+      changed_when: false
+      failed_when: false
+
+    - debug:
+        msg: "{{ _ss.stdout | default('Paper not running or not bound to WG IP yet.') }}"

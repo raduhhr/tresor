@@ -1,0 +1,4 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+{{ bday_notifier_cron_times }} {{ bday_notifier_run_user }} {{ bday_notifier_wrapper_path }} >> {{ bday_notifier_log_path }} 2>&1

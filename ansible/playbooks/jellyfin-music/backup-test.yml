@@ -1,0 +1,310 @@
+---
+# playbooks/jellyfin-music/backup-test.yml
+# Full backup/restore lifecycle test for Jellyfin Music.
+# Fingerprints library.db to prove user data & music library metadata survive.
+#
+# Usage:
+#   ansible-playbook playbooks/jellyfin-music/backup-test.yml
+#   ansible-playbook playbooks/jellyfin-music/backup-test.yml -e confirm_test=yes
+
+- name: "Backup Test — Phase 1: Fresh backup"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/jellyfin-music"
+    data_dir: "/mnt/ssd/configs/jellyfin-music"
+    container_name: "jellyfin-music"
+    confirm_test: "no"
+
+  tasks:
+
+    - name: Ensure backup directory exists
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Check if container is running
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _info
+      failed_when: false
+
+    - name: Stop container before backup
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+        stop_timeout: 30
+      when: _info.exists | default(false) and (_info.container.State.Running | default(false))
+
+    - name: Create fresh backup
+      ansible.builtin.shell: |
+        set -eu
+        DATE=$(date +%d%m%Y-%H%M)
+        SNAPSHOT="{{ backup_dir }}/jellyfin-music-backup-$DATE.tar.gz"
+        tar -czf "$SNAPSHOT" -C /mnt/ssd/configs jellyfin-music
+        echo "$SNAPSHOT"
+      register: _fresh_backup
+
+    - name: Stat backup
+      ansible.builtin.stat:
+        path: "{{ _fresh_backup.stdout }}"
+      register: _backup_stat
+
+    - name: Fail if too small
+      ansible.builtin.fail:
+        msg: "Backup only {{ (_backup_stat.stat.size / 1048576) | round(2) }} MB."
+      when: _backup_stat.stat.size < 10240
+
+- name: "Backup Test — Phase 2: Fingerprint"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/jellyfin-music"
+
+  tasks:
+
+    - name: Count files
+      ansible.builtin.shell: find {{ data_dir }} -type f | wc -l
+      register: _file_count_before
+      changed_when: false
+
+    - name: Get size
+      ansible.builtin.shell: du -sb {{ data_dir }} | awk '{print $1}'
+      register: _size_before
+      changed_when: false
+
+    - name: Hash library.db
+      ansible.builtin.shell: |
+        DB=$(find {{ data_dir }} -name 'library.db' -type f 2>/dev/null | head -1)
+        if [ -n "$DB" ]; then
+          md5sum "$DB" | awk '{print $1}'
+        else
+          echo "no-library-db"
+        fi
+      register: _db_hash_before
+      changed_when: false
+
+    - name: Hash user data files
+      ansible.builtin.shell: |
+        if [ -d "{{ data_dir }}/data" ]; then
+          find {{ data_dir }}/data -name '*.xml' -o -name '*.json' 2>/dev/null | sort | xargs md5sum 2>/dev/null | md5sum | awk '{print $1}'
+        else
+          echo "no-user-data"
+        fi
+      register: _user_hash_before
+      changed_when: false
+
+    - name: Store fingerprint
+      ansible.builtin.set_fact:
+        pre_file_count: "{{ _file_count_before.stdout | trim }}"
+        pre_size_bytes: "{{ _size_before.stdout | trim }}"
+        pre_db_hash: "{{ _db_hash_before.stdout | trim }}"
+        pre_user_hash: "{{ _user_hash_before.stdout | trim }}"
+        test_backup_file: "{{ _fresh_backup.stdout }}"
+        cacheable: true
+
+    - name: Show fingerprint
+      ansible.builtin.debug:
+        msg:
+          files: "{{ pre_file_count }}"
+          size_mb: "{{ (pre_size_bytes | int / 1048576) | round(1) }}"
+          library_db_hash: "{{ pre_db_hash }}"
+          user_data_hash: "{{ pre_user_hash }}"
+
+- name: "Backup Test — Phase 3: Confirm"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/jellyfin-music"
+    confirm_test: "no"
+
+  tasks:
+
+    - name: "⚠️  BACKUP TEST CONFIRMATION"
+      ansible.builtin.pause:
+        prompt: |
+          JELLYFIN-MUSIC BACKUP/RESTORE TEST
+          Backup:       {{ test_backup_file | basename }}
+          Library hash: {{ pre_db_hash }}
+          User hash:    {{ pre_user_hash }}
+          This will WIPE {{ data_dir }} and restore. Type 'yes'
+      register: _confirm
+      when: confirm_test | lower != 'yes'
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Test aborted."
+      when:
+        - confirm_test | lower != 'yes'
+        - _confirm.user_input | default('') | lower != 'yes'
+
+- name: "Backup Test — Phase 4: Teardown"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/jellyfin-music"
+    container_name: "jellyfin-music"
+
+  tasks:
+
+    - name: Stop container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: stopped
+        stop_timeout: 30
+      failed_when: false
+
+    - name: Remove container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+        force_kill: true
+      failed_when: false
+
+    - name: Wipe data directory
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: absent
+
+    - name: Verify wiped
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: _wiped
+
+    - name: Confirm wipe
+      ansible.builtin.assert:
+        that: not _wiped.stat.exists
+
+- name: "Backup Test — Phase 5: Restore"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/jellyfin-music"
+
+  tasks:
+
+    - name: Ensure parent dir
+      ansible.builtin.file:
+        path: /mnt/ssd/configs
+        state: directory
+        mode: '0755'
+
+    - name: Extract backup
+      ansible.builtin.shell: |
+        tar -xzf "{{ test_backup_file }}" -C /mnt/ssd/configs
+
+    - name: Verify restored
+      ansible.builtin.stat:
+        path: "{{ data_dir }}"
+      register: _restored
+
+    - name: Fail if not restored
+      ansible.builtin.fail:
+        msg: "Extraction didn't produce {{ data_dir }}."
+      when: not _restored.stat.exists
+
+    - name: Fix ownership
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: directory
+        owner: "1000"
+        group: "1000"
+        recurse: true
+
+- name: "Backup Test — Phase 6: Redeploy"
+  import_playbook: deploy.yml
+
+- name: "Backup Test — Phase 7: Verify"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    data_dir: "/mnt/ssd/configs/jellyfin-music"
+    container_name: "jellyfin-music"
+
+  tasks:
+
+    - name: Count files after
+      ansible.builtin.shell: find {{ data_dir }} -type f | wc -l
+      register: _file_count_after
+      changed_when: false
+
+    - name: Hash library.db after
+      ansible.builtin.shell: |
+        DB=$(find {{ data_dir }} -name 'library.db' -type f 2>/dev/null | head -1)
+        if [ -n "$DB" ]; then
+          md5sum "$DB" | awk '{print $1}'
+        else
+          echo "no-library-db"
+        fi
+      register: _db_hash_after
+      changed_when: false
+
+    - name: Hash user data after
+      ansible.builtin.shell: |
+        if [ -d "{{ data_dir }}/data" ]; then
+          find {{ data_dir }}/data -name '*.xml' -o -name '*.json' 2>/dev/null | sort | xargs md5sum 2>/dev/null | md5sum | awk '{print $1}'
+        else
+          echo "no-user-data"
+        fi
+      register: _user_hash_after
+      changed_when: false
+
+    - name: Compare fingerprints
+      ansible.builtin.debug:
+        msg:
+          metric:      ["Before", "After", "Match"]
+          file_count:  ["{{ pre_file_count }}", "{{ _file_count_after.stdout | trim }}", "{{ pre_file_count == _file_count_after.stdout | trim }}"]
+          library_db:  ["{{ pre_db_hash }}", "{{ _db_hash_after.stdout | trim }}", "{{ pre_db_hash == _db_hash_after.stdout | trim }}"]
+          user_data:   ["{{ pre_user_hash }}", "{{ _user_hash_after.stdout | trim }}", "{{ pre_user_hash == _user_hash_after.stdout | trim }}"]
+
+    - name: Assert library DB integrity
+      ansible.builtin.assert:
+        that:
+          - pre_db_hash == _db_hash_after.stdout | trim
+        success_msg: "✅ library.db hash matches — music library & users intact!"
+        fail_msg: "❌ library.db MISMATCH! Before: {{ pre_db_hash }} After: {{ _db_hash_after.stdout | trim }}"
+
+    - name: Assert user data integrity
+      ansible.builtin.assert:
+        that:
+          - pre_user_hash == _user_hash_after.stdout | trim
+        success_msg: "✅ User data hash matches!"
+        fail_msg: "❌ User data MISMATCH!"
+
+    - name: Verify container running
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: _final
+
+    - name: Assert container up
+      ansible.builtin.assert:
+        that:
+          - _final.exists
+          - _final.container.State.Running
+
+    - name: "🎉 BACKUP TEST PASSED"
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════"
+          - "  JELLYFIN-MUSIC BACKUP/RESTORE TEST: PASSED"
+          - "════════════════════════════════════════════════"
+          - "  Library DB:   ✅ {{ pre_db_hash }}"
+          - "  User data:    ✅ {{ pre_user_hash }}"
+          - "  Files:        {{ pre_file_count }} → {{ _file_count_after.stdout | trim }}"
+          - "  Container:    ✅ running"
+          - "════════════════════════════════════════════════"

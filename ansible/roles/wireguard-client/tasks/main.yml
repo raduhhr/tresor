@@ -1,0 +1,206 @@
+---
+############################
+# 0) Preconditions
+############################
+- name: Assert required vars
+  ansible.builtin.assert:
+    that:
+      - wg_interface is not none
+      - wg_address is not none
+      - (wg_private_key | length > 0) or (wg_private_key_file | length > 0) or wg_generate_keys_when_missing
+      - wg_peers | length > 0
+    fail_msg: "wg_interface/wg_address/keys/peers are not properly defined."
+
+############################
+# 1) Packages
+############################
+- name: Ensure wireguard tools are present
+  become: true
+  ansible.builtin.apt:
+    name:
+      - wireguard
+      - wireguard-tools
+    update_cache: true
+    state: present
+
+############################
+# 2) Ensure directory & keys
+############################
+- name: Ensure /etc/wireguard exists (0700)
+  become: true
+  ansible.builtin.file:
+    path: /etc/wireguard
+    state: directory
+    mode: "0700"
+
+# Check if private key file exists
+- name: Check if private key file exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ wg_private_key_file }}"
+  register: _privkey_exists
+
+# Optional local key generation (kept entirely on host)
+- name: Generate private key if missing and allowed
+  become: true
+  ansible.builtin.command: "wg genkey"
+  register: _genkey
+  changed_when: _genkey.rc == 0
+  when:
+    - wg_generate_keys_when_missing | bool
+    - (wg_private_key | length) == 0
+    - not _privkey_exists.stat.exists
+  no_log: true
+
+- name: Write generated private key to file (0600)
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ wg_private_key_file }}"
+    content: "{{ _genkey.stdout }}"
+    mode: "0600"
+  when:
+    - wg_generate_keys_when_missing | bool
+    - _genkey is defined
+    - _genkey is changed
+  no_log: true
+
+# If private key provided via var, ensure it's present on disk (optional)
+- name: Materialize provided private key to file (0600)
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ wg_private_key_file }}"
+    content: "{{ wg_private_key | trim }}"
+    mode: "0600"
+  when:
+    - (wg_private_key | length) > 0
+
+- name: Read private key from file (remote host)
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ wg_private_key_file }}"
+  register: _privkey_slurp
+  when: (wg_private_key | default('') | length) == 0
+
+- name: Set private key fact from file
+  ansible.builtin.set_fact:
+    wg_private_key: "{{ _privkey_slurp.content | b64decode | trim }}"
+  when: 
+    - _privkey_slurp is defined
+    - _privkey_slurp.content is defined
+  no_log: true
+
+############################
+# 3) Render config
+############################
+- name: Render {{ wg_interface }} config
+  become: true
+  ansible.builtin.template:
+    src: "wg0.conf.j2"
+    dest: "/etc/wireguard/{{ wg_interface }}.conf"
+    mode: "0600"
+  register: _wg_config_changed
+  no_log: true  # config contains secrets
+
+############################
+# 4) Service control - FIXED VERSION
+############################
+# Stop existing interface/service cleanly
+- name: Stop wg-quick@{{ wg_interface }} service
+  become: true
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ wg_interface }}"
+    state: stopped
+  register: _service_stopped
+  failed_when: false
+
+- name: Ensure {{ wg_interface }} interface is down
+  become: true
+  ansible.builtin.command: "wg-quick down {{ wg_interface }}"
+  register: _wg_down
+  changed_when: _wg_down.rc == 0
+  failed_when: false
+
+# Debug: show what endpoint we're trying to connect to
+- name: Show rendered config for debugging
+  become: true
+  ansible.builtin.command: "grep -E '(Endpoint|PublicKey)' /etc/wireguard/{{ wg_interface }}.conf"
+  register: _wg_debug
+  changed_when: false
+
+- name: Display endpoint being used
+  ansible.builtin.debug:
+    msg: "{{ _wg_debug.stdout_lines }}"
+
+# Bring up interface directly (more reliable than systemd on first run)
+- name: Bring up {{ wg_interface }} with wg-quick
+  become: true
+  ansible.builtin.shell: |
+    timeout 30 wg-quick up {{ wg_interface }}
+  args:
+    executable: /bin/bash
+  register: _wg_up
+  changed_when: _wg_up.rc == 0
+  failed_when: _wg_up.rc != 0 and _wg_up.rc != 124  # 124 is timeout exit code
+
+# Now enable systemd service for persistence
+- name: Enable wg-quick@{{ wg_interface }} for boot
+  become: true
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ wg_interface }}"
+    enabled: "{{ wg_enable | bool }}"
+    daemon_reload: true
+
+# Verify interface is actually UP
+- name: Wait for {{ wg_interface }} to be UP
+  become: true
+  ansible.builtin.command: "ip link show {{ wg_interface }}"
+  register: _wg_link
+  retries: 10
+  delay: 1
+  until: _wg_link.stdout is search('UP,LOWER_UP')
+  changed_when: false
+  
+############################
+# 4b) Docker-after-WG systemd drop-in
+############################
+# Ensures Docker starts after WireGuard on boot, preventing Paper from
+# trying to bind to the WG IP (10.66.66.2) before wg0 exists.
+- name: Ensure Docker systemd override directory exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: '0755'
+
+- name: Make Docker start after WireGuard (prevents Paper bind race on reboot)
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/after-wg.conf
+    mode: '0644'
+    content: |
+      [Unit]
+      After=wg-quick@{{ wg_interface }}.service
+  register: _docker_wg_dropin
+
+- name: Reload systemd daemon if drop-in changed
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: _docker_wg_dropin is changed
+
+############################
+# 5) Fact export (for other roles)
+############################
+- name: Show WireGuard status
+  become: true
+  ansible.builtin.command: "wg show"
+  register: _wg_show
+  changed_when: false
+
+- name: Print wg status (friendly)
+  ansible.builtin.debug:
+    msg:
+      interface: "{{ wg_interface }}"
+      address: "{{ wg_address }}"
+      bind_ip: "{{ wg_bind_ip }}"
+      status: "{{ _wg_show.stdout | default('n/a') | regex_search('latest handshake.*', multiline=True) | default('wg up (see wg show)') }}"

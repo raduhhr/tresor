@@ -1,0 +1,383 @@
+---
+# playbooks/paper/backup-test.yml
+#
+# Full backup/restore lifecycle test for Paper.
+# Proves your backups actually work — Schrödinger no more.
+#
+# Usage:
+#   ansible-playbook playbooks/paper/backup-test.yml
+#
+# What happens:
+#   1. Takes a FRESH backup snapshot (so we're testing the real pipeline)
+#   2. Records a fingerprint of the current world (file count, size, world hash)
+#   3. Stops & removes the Paper container
+#   4. Wipes the data directory completely
+#   5. Restores from the backup we JUST took
+#   6. Redeploys Paper via the role
+#   7. Compares the restored world fingerprint against the original
+#   8. Verifies Paper is running and reachable through WireGuard
+#
+# Safety:
+#   - Interactive confirmation before the destructive phase
+#   - Override with: -e confirm_test=yes
+#   - The fresh backup lives in /mnt/data/files/Backups/paper/ like any other snapshot
+
+########################################
+# Phase 1: Fresh backup
+########################################
+- name: "Backup Test — Phase 1: Fresh backup snapshot"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/paper"
+    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_container: "paper"
+    confirm_test: "no"
+
+  tasks:
+
+    - name: Ensure backup directory exists
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Check if Paper container is running
+      community.docker.docker_container_info:
+        name: "{{ paper_container }}"
+      register: _paper_info
+      failed_when: false
+
+    - name: Stop Paper gracefully before backup (allow world save)
+      community.docker.docker_container:
+        name: "{{ paper_container }}"
+        state: stopped
+        stop_timeout: 30
+      when: _paper_info.exists | default(false) and (_paper_info.container.State.Running | default(false))
+
+    - name: Create fresh backup snapshot
+      ansible.builtin.shell: |
+        set -eu
+        DATE=$(date +%d%m%Y-%H%M)
+        SNAPSHOT="{{ backup_dir }}/paper-backup-$DATE.tar.gz"
+        tar -czf "$SNAPSHOT" -C /mnt/ssd/services paper
+        echo "$SNAPSHOT"
+      register: _fresh_backup
+
+    - name: Show backup info
+      ansible.builtin.debug:
+        msg: "Fresh backup created: {{ _fresh_backup.stdout }}"
+
+    - name: Stat the fresh backup
+      ansible.builtin.stat:
+        path: "{{ _fresh_backup.stdout }}"
+      register: _backup_stat
+
+    - name: Fail if backup is suspiciously small (< 1MB)
+      ansible.builtin.fail:
+        msg: >
+          Backup is only {{ (_backup_stat.stat.size / 1048576) | round(2) }} MB —
+          this seems too small for a full Paper server. Aborting.
+      when: _backup_stat.stat.size < 1048576
+
+########################################
+# Phase 2: Fingerprint the live data
+########################################
+- name: "Backup Test — Phase 2: Fingerprint current state"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    paper_data_dir: "/mnt/ssd/services/paper"
+
+  tasks:
+
+    - name: Count files in data dir
+      ansible.builtin.shell: |
+        find {{ paper_data_dir }} -type f | wc -l
+      register: _file_count_before
+      changed_when: false
+
+    - name: Get total size of data dir
+      ansible.builtin.shell: |
+        du -sb {{ paper_data_dir }} | awk '{print $1}'
+      register: _size_before
+      changed_when: false
+
+    # Hash the world-level region files — these are the irreplaceable bits
+    - name: Hash world region files (if present)
+      ansible.builtin.shell: |
+        if [ -d "{{ paper_data_dir }}/world/region" ]; then
+          find {{ paper_data_dir }}/world/region -name '*.mca' -exec md5sum {} + | sort | md5sum | awk '{print $1}'
+        else
+          echo "no-world-regions"
+        fi
+      register: _world_hash_before
+      changed_when: false
+
+    - name: Store pre-wipe fingerprint
+      ansible.builtin.set_fact:
+        pre_file_count: "{{ _file_count_before.stdout | trim }}"
+        pre_size_bytes: "{{ _size_before.stdout | trim }}"
+        pre_world_hash: "{{ _world_hash_before.stdout | trim }}"
+        test_backup_file: "{{ _fresh_backup.stdout }}"
+        cacheable: true
+
+    - name: Show fingerprint
+      ansible.builtin.debug:
+        msg:
+          files: "{{ pre_file_count }}"
+          size_bytes: "{{ pre_size_bytes }}"
+          size_mb: "{{ (pre_size_bytes | int / 1048576) | round(1) }}"
+          world_region_hash: "{{ pre_world_hash }}"
+
+########################################
+# Phase 3: Confirmation gate
+########################################
+- name: "Backup Test — Phase 3: Confirm destructive test"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    paper_data_dir: "/mnt/ssd/services/paper"
+    confirm_test: "no"
+
+  tasks:
+
+    - name: "⚠️  BACKUP TEST CONFIRMATION"
+      ansible.builtin.pause:
+        prompt: |
+
+          ╔══════════════════════════════════════════════════════════════╗
+          ║  PAPER BACKUP/RESTORE TEST                                  ║
+          ╠══════════════════════════════════════════════════════════════╣
+          ║                                                              ║
+          ║  Backup:       {{ test_backup_file | basename }}
+          ║  Backup size:  {{ ((_backup_stat.stat.size | default(0)) / 1048576) | round(1) }} MB
+          ║  Data files:   {{ pre_file_count }}
+          ║  Data size:    {{ (pre_size_bytes | int / 1048576) | round(1) }} MB
+          ║  World hash:   {{ pre_world_hash }}
+          ║                                                              ║
+          ║  This test will:                                             ║
+          ║    → Stop & remove the Paper container                       ║
+          ║    → WIPE {{ paper_data_dir }} completely
+          ║    → Restore from the fresh backup                           ║
+          ║    → Redeploy & verify                                       ║
+          ║    → Compare fingerprints to prove integrity                 ║
+          ║                                                              ║
+          ║  The backup was JUST taken — your data is safe.              ║
+          ╚══════════════════════════════════════════════════════════════╝
+
+          Type 'yes' to proceed
+      register: _confirm
+      when: confirm_test | lower != 'yes'
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Backup test aborted by user."
+      when:
+        - confirm_test | lower != 'yes'
+        - _confirm.user_input | default('') | lower != 'yes'
+
+########################################
+# Phase 4: Destroy
+########################################
+- name: "Backup Test — Phase 4: Teardown"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_container: "paper"
+
+  tasks:
+
+    - name: Stop Paper container gracefully (allow world save)
+      community.docker.docker_container:
+        name: "{{ paper_container }}"
+        state: stopped
+        stop_timeout: 30
+      register: _stop
+      failed_when: false
+
+    - name: Remove Paper container
+      community.docker.docker_container:
+        name: "{{ paper_container }}"
+        state: absent
+        force_kill: true
+      failed_when: false
+
+    - name: Wipe Paper data directory
+      ansible.builtin.file:
+        path: "{{ paper_data_dir }}"
+        state: absent
+
+    - name: Verify data dir is gone
+      ansible.builtin.stat:
+        path: "{{ paper_data_dir }}"
+      register: _wiped
+
+    - name: Confirm wipe succeeded
+      ansible.builtin.assert:
+        that: not _wiped.stat.exists
+        fail_msg: "Failed to wipe {{ paper_data_dir }} — aborting."
+
+    - name: "💀 Data directory wiped"
+      ansible.builtin.debug:
+        msg: "{{ paper_data_dir }} is gone. Restoring from backup..."
+
+########################################
+# Phase 5: Restore from backup
+########################################
+- name: "Backup Test — Phase 5: Restore"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_uid: 1000
+    paper_gid: 1000
+
+  tasks:
+
+    - name: Ensure parent directory exists
+      ansible.builtin.file:
+        path: /mnt/ssd/services
+        state: directory
+        mode: '0755'
+
+    - name: Extract backup tarball
+      ansible.builtin.shell: |
+        tar -xzf "{{ test_backup_file }}" -C /mnt/ssd/services
+      register: _extract
+
+    - name: Verify paper directory was restored
+      ansible.builtin.stat:
+        path: "{{ paper_data_dir }}"
+      register: _restored_dir
+
+    - name: Fail if restore extraction failed
+      ansible.builtin.fail:
+        msg: "Extraction didn't produce {{ paper_data_dir }}. Tarball may be corrupt."
+      when: not _restored_dir.stat.exists
+
+    - name: Fix ownership recursively
+      ansible.builtin.file:
+        path: "{{ paper_data_dir }}"
+        state: directory
+        owner: "{{ paper_uid }}"
+        group: "{{ paper_gid }}"
+        recurse: true
+
+########################################
+# Phase 6: Redeploy via role
+########################################
+- name: "Backup Test — Phase 6: Redeploy"
+  import_playbook: deploy.yml
+
+########################################
+# Phase 7: Fingerprint restored data & compare
+########################################
+- name: "Backup Test — Phase 7: Verify integrity"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_container: "paper"
+    wg_bind_ip: "{{ hostvars[inventory_hostname].wg_ip | default(hostvars[inventory_hostname].wg_bind_ip | default('10.66.66.2')) }}"
+
+  tasks:
+
+    - name: Count files after restore
+      ansible.builtin.shell: |
+        find {{ paper_data_dir }} -type f | wc -l
+      register: _file_count_after
+      changed_when: false
+
+    - name: Get total size after restore
+      ansible.builtin.shell: |
+        du -sb {{ paper_data_dir }} | awk '{print $1}'
+      register: _size_after
+      changed_when: false
+
+    - name: Hash world region files after restore
+      ansible.builtin.shell: |
+        if [ -d "{{ paper_data_dir }}/world/region" ]; then
+          find {{ paper_data_dir }}/world/region -name '*.mca' -exec md5sum {} + | sort | md5sum | awk '{print $1}'
+        else
+          echo "no-world-regions"
+        fi
+      register: _world_hash_after
+      changed_when: false
+
+    # The deploy role re-templates server.properties, paper-global.yml, eula.txt, velocity.secret
+    # so file count and total size may differ SLIGHTLY. World region hash should be IDENTICAL.
+    - name: Compare fingerprints
+      ansible.builtin.debug:
+        msg:
+          metric:         ["Before", "After", "Match"]
+          file_count:     ["{{ pre_file_count }}", "{{ _file_count_after.stdout | trim }}", "{{ pre_file_count == _file_count_after.stdout | trim }}"]
+          size_bytes:     ["{{ pre_size_bytes }}", "{{ _size_after.stdout | trim }}", "{{ pre_size_bytes == _size_after.stdout | trim }}"]
+          world_hash:     ["{{ pre_world_hash }}", "{{ _world_hash_after.stdout | trim }}", "{{ pre_world_hash == _world_hash_after.stdout | trim }}"]
+
+    - name: Assert world data integrity
+      ansible.builtin.assert:
+        that:
+          - pre_world_hash == _world_hash_after.stdout | trim
+        success_msg: "✅ World region hash matches — backup integrity verified!"
+        fail_msg: >
+          ❌ World region hash MISMATCH!
+          Before: {{ pre_world_hash }}
+          After:  {{ _world_hash_after.stdout | trim }}
+          Something went wrong during backup or restore.
+
+    # File count might differ by a few due to re-templated configs — warn if way off
+    - name: Warn if file count differs significantly
+      ansible.builtin.debug:
+        msg: >
+          ⚠️  File count differs by {{ (pre_file_count | int - _file_count_after.stdout | trim | int) | abs }}.
+          Small differences are normal (deploy re-templates a few configs).
+          Large differences may indicate a problem.
+      when: (pre_file_count | int - _file_count_after.stdout | trim | int) | abs > 10
+
+    - name: Verify Paper is bound to WireGuard IP
+      ansible.builtin.command: "ss -H -lnpt 'sport = :25565'"
+      register: _ss
+      changed_when: false
+      retries: 15
+      delay: 5
+      until: _ss.stdout | length > 0
+
+    - name: Verify Paper reachable from VPS through WireGuard
+      ansible.builtin.wait_for:
+        host: "{{ wg_bind_ip }}"
+        port: 25565
+        timeout: 90
+      delegate_to: tresor-vps
+      run_once: true
+
+    - name: "🎉 BACKUP TEST PASSED"
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════════════"
+          - "  BACKUP/RESTORE TEST: PASSED"
+          - "════════════════════════════════════════════════"
+          - "  World hash:   ✅ {{ pre_world_hash }}"
+          - "  Files:        {{ pre_file_count }} → {{ _file_count_after.stdout | trim }}"
+          - "  Size:         {{ (pre_size_bytes | int / 1048576) | round(1) }}MB → {{ (_size_after.stdout | trim | int / 1048576) | round(1) }}MB"
+          - "  Container:    ✅ running"
+          - "  WG bind:      ✅ {{ wg_bind_ip }}:25565"
+          - "  VPS reach:    ✅ reachable"
+          - "════════════════════════════════════════════════"
+          - "  Your backups are REAL. Schrödinger is dead."
+          - "════════════════════════════════════════════════"

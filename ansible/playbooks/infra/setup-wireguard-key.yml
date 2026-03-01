@@ -1,0 +1,78 @@
+---
+- name: Generate WireGuard client keys (Tresor)
+  hosts: tresor          # or 'prod' if that’s your host/group
+  become: true
+
+  vars:
+    wg_dir: /etc/wireguard
+    wg_priv: "{{ wg_dir }}/tresor.key"
+    wg_pub:  "{{ wg_dir }}/tresor.pub"
+    wg_psk:  "{{ wg_dir }}/tresor.psk"
+
+  tasks:
+    - name: Ensure WireGuard tools are installed
+      ansible.builtin.apt:
+        name:
+          - wireguard-tools
+        state: present
+        update_cache: yes
+
+    - name: Ensure wg directory exists with safe perms
+      ansible.builtin.file:
+        path: "{{ wg_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Generate private key if missing
+      ansible.builtin.command:
+        cmd: wg genkey
+        creates: "{{ wg_priv }}"
+      register: wg_priv_out
+      changed_when: wg_priv_out.rc == 0
+
+    - name: Save private key output to file (if created)
+      ansible.builtin.copy:
+        dest: "{{ wg_priv }}"
+        content: "{{ wg_priv_out.stdout }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when: wg_priv_out.stdout is defined and wg_priv_out.stdout != ""
+
+    - name: Generate public key from private key
+      ansible.builtin.command:
+        cmd: bash -c "cat {{ wg_priv }} | wg pubkey"
+      register: wg_pub_out
+      changed_when: false
+
+    - name: Write public key
+      ansible.builtin.copy:
+        dest: "{{ wg_pub }}"
+        content: "{{ wg_pub_out.stdout }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Generate preshared key if missing
+      ansible.builtin.command:
+        cmd: wg genpsk
+        creates: "{{ wg_psk }}"
+      register: wg_psk_out
+      changed_when: wg_psk_out.rc == 0
+
+    - name: Save preshared key
+      ansible.builtin.copy:
+        dest: "{{ wg_psk }}"
+        content: "{{ wg_psk_out.stdout }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when: wg_psk_out.stdout is defined and wg_psk_out.stdout != ""
+
+    - name: Show generated keys (public + preshared only)
+      ansible.builtin.debug:
+        msg:
+          - "Public key: {{ wg_pub_out.stdout }}"
+          - "PSK: {{ wg_psk_out.stdout | default('unchanged/existing') }}"

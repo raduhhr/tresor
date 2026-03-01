@@ -1,0 +1,12 @@
+---
+- name: Restart Jellyfin container
+  hosts: prod
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Restart Jellyfin
+      community.docker.docker_container:
+        name: jellyfin
+        state: started
+        restart: true
+

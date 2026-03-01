@@ -1,0 +1,68 @@
+---
+- name: "bday-notifier status (cron health check)"
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    cron_file: "/etc/cron.d/bday-notifier"
+    wrapper_path: "/usr/local/bin/bday-notifier-run"
+    script_path: "/opt/bday-notifier/bday_notifier.py"
+    config_path: "/mnt/ssd/configs/bday-notifier/birthdays.yml"
+    log_path: "/mnt/ssd/configs/bday-notifier/state/bday-notifier.log"
+
+  tasks:
+    - name: Check cron file exists
+      ansible.builtin.stat:
+        path: "{{ cron_file }}"
+      register: _cron
+
+    - name: Assert cron job is installed
+      ansible.builtin.assert:
+        that: _cron.stat.exists
+        fail_msg: "Cron file {{ cron_file }} missing — run deploy."
+
+    - name: Check wrapper script exists
+      ansible.builtin.stat:
+        path: "{{ wrapper_path }}"
+      register: _wrapper
+
+    - name: Assert wrapper is installed
+      ansible.builtin.assert:
+        that: _wrapper.stat.exists
+        fail_msg: "Wrapper {{ wrapper_path }} missing — run deploy."
+
+    - name: Check notifier script exists
+      ansible.builtin.stat:
+        path: "{{ script_path }}"
+      register: _script
+
+    - name: Assert script is installed
+      ansible.builtin.assert:
+        that: _script.stat.exists
+        fail_msg: "Script {{ script_path }} missing — run deploy."
+
+    - name: Check birthdays config exists
+      ansible.builtin.stat:
+        path: "{{ config_path }}"
+      register: _config
+
+    - name: Assert config is present
+      ansible.builtin.assert:
+        that: _config.stat.exists
+        fail_msg: "Config {{ config_path }} missing — run deploy."
+
+    - name: Read last log entry
+      ansible.builtin.shell: |
+        tail -1 "{{ log_path }}" 2>/dev/null || echo "No log file yet"
+      register: _last_log
+      changed_when: false
+
+    - name: Show status summary
+      ansible.builtin.debug:
+        msg:
+          cron: "{{ _cron.stat.exists | ternary('installed', 'MISSING') }}"
+          wrapper: "{{ _wrapper.stat.exists | ternary('installed', 'MISSING') }}"
+          script: "{{ _script.stat.exists | ternary('installed', 'MISSING') }}"
+          config: "{{ _config.stat.exists | ternary('present', 'MISSING') }}"
+          last_run: "{{ _last_log.stdout }}"

@@ -1,0 +1,81 @@
+---
+- name: Install python deps
+  apt:
+    name:
+      - python3-yaml
+      - python3-requests
+    state: present
+    update_cache: true
+
+- name: Create config dir
+  file:
+    path: "{{ bday_notifier_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ bday_notifier_run_group }}"
+    mode: "0750"
+
+- name: Create state dir
+  file:
+    path: "{{ bday_notifier_state_dir }}"
+    state: directory
+    owner: "{{ bday_notifier_run_user }}"
+    group: "{{ bday_notifier_run_group }}"
+    mode: "0750"
+
+- name: Create app dir
+  file:
+    path: "{{ bday_notifier_app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install notifier script
+  ansible.builtin.template:
+    src: "bday_notifier.py.j2"
+    dest: "{{ bday_notifier_script_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render birthdays config
+  template:
+    src: "birthdays.yml.j2"
+    dest: "{{ bday_notifier_cfg_path }}"
+    owner: root
+    group: "{{ bday_notifier_run_group }}"
+    mode: "0640"
+
+- name: Render secrets env file
+  template:
+    src: "bday-notifier.env.j2"
+    dest: "{{ bday_notifier_env_path }}"
+    owner: root
+    group: "{{ bday_notifier_run_group }}"
+    mode: "0640"
+
+- name: Install wrapper
+  template:
+    src: "bday-notifier-run.sh.j2"
+    dest: "{{ bday_notifier_wrapper_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install cron job
+  template:
+    src: "bday-notifier.cron.j2"
+    dest: "/etc/cron.d/bday-notifier"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install logrotate config
+  template:
+    src: "bday-notifier.logrotate.j2"
+    dest: "/etc/logrotate.d/bday-notifier"
+    owner: root
+    group: root
+    mode: "0644"
+  when: bday_notifier_logrotate_enabled

@@ -1,0 +1,202 @@
+---
+############################
+# 0) Preconditions
+############################
+- name: Assert required inputs
+  ansible.builtin.assert:
+    that:
+      - wg_interface is not none
+      - wg_address is not none
+      - wg_listen_port is not none
+      - wg_peers | length > 0
+    fail_msg: "wg_interface/address/listen_port/peers must be defined."
+
+############################
+# 1) Packages
+############################
+- name: Ensure WireGuard packages present
+  become: true
+  ansible.builtin.apt:
+    name:
+      - wireguard
+      - wireguard-tools
+    state: present
+    update_cache: true
+
+############################
+# 2) Ensure /etc/wireguard and keys
+############################
+- name: Ensure /etc/wireguard exists (0700)
+  become: true
+  ansible.builtin.file:
+    path: /etc/wireguard
+    state: directory
+    mode: "0700"
+
+# Check if private key file exists
+- name: Check if private key file exists
+  become: true
+  ansible.builtin.stat:
+    path: "{{ wg_private_key_file }}"
+  register: _privkey_stat
+
+# Generate key if needed
+- name: Generate private key if missing
+  become: true
+  ansible.builtin.command: "wg genkey"
+  register: _genkey_srv
+  changed_when: true
+  when:
+    - not _privkey_stat.stat.exists
+    - (wg_private_key | default('') | length) == 0
+  no_log: true
+
+- name: Write generated private key to file (0600)
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ wg_private_key_file }}"
+    content: "{{ _genkey_srv.stdout }}"
+    mode: "0600"
+  when:
+    - _genkey_srv is defined
+    - _genkey_srv is changed
+  no_log: true
+
+# Materialize vault-provided key if given
+- name: Materialize private key from vault to file (0600)
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ wg_private_key_file }}"
+    content: "{{ wg_private_key | trim }}"
+    mode: "0600"
+  when: 
+    - wg_private_key | default('') | length > 0
+  no_log: true
+
+# Now read the key content from the remote host (works for both generated and vault-provided)
+- name: Read private key from remote host
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ wg_private_key_file }}"
+  register: _privkey_content
+  no_log: true
+
+- name: Set private key fact
+  ansible.builtin.set_fact:
+    _wg_private_key_actual: "{{ _privkey_content.content | b64decode | trim }}"
+  no_log: true
+
+############################
+# 3) Render config
+############################
+- name: Render {{ wg_interface }} config
+  become: true
+  ansible.builtin.template:
+    src: "wg.conf.j2"
+    dest: "/etc/wireguard/{{ wg_interface }}.conf"
+    mode: "0600"
+  notify: restart wg
+  no_log: true
+
+############################
+# 4) Optional sysctl (usually off for your design)
+############################
+- name: Enable IP forwarding (optional)
+  when: wg_manage_sysctl | default(false) | bool
+  become: true
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ sysctl_forward_keys | default([]) }}"
+
+############################
+# 5) Service control
+############################
+# Stop service first if it's running (to handle config changes)
+- name: Stop wg-quick@{{ wg_interface }} if running
+  become: true
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ wg_interface }}"
+    state: stopped
+  failed_when: false
+  when: wg_interface is defined
+
+# Ensure interface is down (in case service stop failed)
+- name: Ensure {{ wg_interface }} interface is down
+  become: true
+  ansible.builtin.command: "wg-quick down {{ wg_interface }}"
+  register: _wg_down
+  changed_when: _wg_down.rc == 0
+  failed_when: false
+
+- name: Enable/Start wg-quick@{{ wg_interface }}
+  become: true
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ wg_interface }}"
+    enabled: "{{ wg_enable | bool }}"
+    state: "{{ wg_state }}"
+    daemon_reload: true
+
+############################
+# 6) UFW rules (CRITICAL FOR VPS)
+############################
+- name: Allow UDP {{ wg_listen_port }} (WireGuard)
+  when: wg_manage_ufw | bool
+  become: true
+  community.general.ufw:
+    rule: allow
+    proto: udp
+    to_port: "{{ wg_listen_port }}"
+
+# Allow all traffic from WG subnet on the WG interface (covers ICMP too)
+- name: Allow IN on {{ wg_interface }} from {{ wg_subnet }}
+  when: wg_manage_ufw | bool
+  become: true
+  ansible.builtin.command: >
+    ufw allow in on {{ wg_interface }} from {{ wg_subnet }} comment 'WG subnet in on {{ wg_interface }}'
+  register: _ufw_in_on_wg
+  changed_when: >
+    _ufw_in_on_wg.stdout is defined and
+    ('added' in _ufw_in_on_wg.stdout or 'updated' in _ufw_in_on_wg.stdout)
+  notify: reload ufw
+
+# Set to ACCEPT only if this host IP-forwards between networks.
+# For app-layer proxying (Velocity), DROP is correct and more secure.
+# Override wg_ufw_forward_policy in group_vars if kernel routing is required.
+- name: Set DEFAULT_FORWARD_POLICY
+  when: wg_manage_ufw | bool
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/default/ufw
+    regexp: ‘^DEFAULT_FORWARD_POLICY=’
+    line: ‘DEFAULT_FORWARD_POLICY="{{ wg_ufw_forward_policy }}"’
+    backup: true
+  notify: reload ufw
+
+
+############################
+# 7) Facts + status
+############################
+- name: Export server wg ip fact
+  ansible.builtin.set_fact:
+    wg_server_ip: "{{ wg_address.split('/')[0] }}"
+    cacheable: true
+
+- name: Show WireGuard status
+  become: true
+  ansible.builtin.command: "wg show"
+  register: _wg
+  changed_when: false
+
+- name: Friendly status
+  ansible.builtin.debug:
+    msg:
+      interface: "{{ wg_interface }}"
+      address: "{{ wg_address }}"
+      listen_port: "{{ wg_listen_port }}"
+      server_ip: "{{ wg_server_ip }}"
+      peers: "{{ wg_peers | map(attribute='name') | list }}"
+      note: "Velocity should bind {{ wg_server_ip }}:25565 (and UFW allow from 10.66.66.2/32)."

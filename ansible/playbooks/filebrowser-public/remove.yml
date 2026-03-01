@@ -1,0 +1,10 @@
+---
+- name: Remove filebrowser-public container (data intact)
+  hosts: prod
+  gather_facts: false
+  tasks:
+    - name: Remove filebrowser-public container
+      community.docker.docker_container:
+        name: filebrowser-public
+        state: absent
+        keep_volumes: true

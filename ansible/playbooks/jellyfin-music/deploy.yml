@@ -1,0 +1,8 @@
+---
+- name: Deploy jellyfin-music (music-only Jellyfin bound to WG IP)
+  hosts: tresor
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: jellyfin-music

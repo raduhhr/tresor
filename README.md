@@ -564,3 +564,12 @@ homelab-node               : ok=18   changed=0    unreachable=0    failed=0    s
 - Off-host rsync backups + external USB HDD target
 - CI/CD via GitHub Actions → Ansible
 - GitOps via Forgejo or Gitea
+```
+
+## Future Expansion
+
+- K3s migration with Terraform provisioning
+- Three-node architecture: control plane / public services / backup storage
+- Off-host rsync backups + external USB HDD target
+- CI/CD via GitHub Actions → Ansible
+- GitOps via Forgejo or Gitea

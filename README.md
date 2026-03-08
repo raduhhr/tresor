@@ -556,14 +556,6 @@ ok: [homelab-node] =>
 
 PLAY RECAP *********************************************************************
 homelab-node               : ok=18   changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
-
-## Future Expansion
-
-- K3s migration with Terraform provisioning
-- Three-node architecture: control plane / public services / backup storage
-- Off-host rsync backups + external USB HDD target
-- CI/CD via GitHub Actions → Ansible
-- GitOps via Forgejo or Gitea
 ```
 
 ## Future Expansion

@@ -1,5 +1,5 @@
 ---
-# cloud.yml — adds the cloud.example.com vhost to the existing nginx instance.
+# cloud.yml — adds the cloud.raduhhr.xyz vhost to the existing nginx instance.
 # Called via: include_role: name: nginx-music tasks_from: cloud
 
 # ── Step 1: Inject rate-limiting zones into nginx.conf (above includes) ───────

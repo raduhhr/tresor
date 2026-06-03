@@ -1,0 +1,86 @@
+---
+- name: Check legacy Meteor root directory after rename
+  ansible.builtin.stat:
+    path: /opt/meteor
+  register: satelite_watcher_legacy_root
+
+- name: Check Satelite Watcher root directory
+  ansible.builtin.stat:
+    path: "{{ satelite_watcher_root }}"
+  register: satelite_watcher_current_root
+
+- name: Migrate legacy Meteor root directory after rename
+  ansible.builtin.command:
+    argv:
+      - mv
+      - /opt/meteor
+      - "{{ satelite_watcher_root }}"
+  when:
+    - satelite_watcher_legacy_root.stat.exists
+    - not satelite_watcher_current_root.stat.exists
+  register: satelite_watcher_legacy_root_migration
+  changed_when: true
+
+- name: Re-own migrated Satelite Watcher root directory
+  ansible.builtin.file:
+    path: "{{ satelite_watcher_root }}"
+    state: directory
+    owner: "{{ satelite_watcher_user }}"
+    group: "{{ satelite_watcher_group }}"
+    recurse: true
+  when: satelite_watcher_legacy_root_migration is changed
+
+- name: Ensure Satelite Watcher directory tree exists
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(satelite_watcher_user) }}"
+    group: "{{ item.group | default(satelite_watcher_group) }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { path: "{{ satelite_watcher_root }}", mode: "0755" }
+    - { path: "{{ satelite_watcher_bin_dir }}", mode: "0755" }
+    - { path: "{{ satelite_watcher_config_dir }}", mode: "0755" }
+    - { path: "{{ satelite_watcher_state_dir }}", mode: "0755" }
+    - { path: "{{ satelite_watcher_state_dir }}/lock", mode: "0755" }
+    - { path: "{{ satelite_watcher_pass_metadata_dir }}", mode: "0755" }
+    - { path: "{{ satelite_watcher_logs_dir }}", mode: "0755" }
+    - { path: "{{ satelite_watcher_xdg_config_home }}", mode: "0755" }
+    - { path: "{{ satelite_watcher_satdump_user_config_dir }}", mode: "0755" }
+    - { path: "{{ satelite_watcher_recordings_dir }}", mode: "0775" }
+
+- name: Repair Satelite Watcher recording directory ownership after rename
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    root={{ satelite_watcher_recordings_dir | quote }}
+    owner={{ satelite_watcher_user | quote }}
+    group={{ satelite_watcher_group | quote }}
+    maxdepth={{ satelite_watcher_repair_recording_directory_ownership_maxdepth | int }}
+
+    canonical="$(realpath -m -- "$root")"
+    case "$canonical" in
+      /|/mnt|/mnt/data|/mnt/data/files|/opt|/home|/var|/tmp)
+        echo "refusing to repair broad recording directory: $canonical" >&2
+        exit 64
+        ;;
+    esac
+
+    needs_repair="$(
+      find "$canonical" -maxdepth "$maxdepth" -type d \
+        \( ! -user "$owner" -o ! -group "$group" -o ! -perm -u=rwx -o ! -perm -g=rwx \) \
+        -print -quit
+    )"
+
+    if [ -n "$needs_repair" ]; then
+      find "$canonical" -maxdepth "$maxdepth" -type d -exec chown "$owner:$group" {} +
+      find "$canonical" -maxdepth "$maxdepth" -type d -exec chmod u+rwx,g+rwx {} +
+      echo "changed=1"
+    else
+      echo "changed=0"
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: "'changed=1' in satelite_watcher_recording_directory_repair.stdout"
+  register: satelite_watcher_recording_directory_repair
+  when: satelite_watcher_repair_recording_directory_ownership | bool

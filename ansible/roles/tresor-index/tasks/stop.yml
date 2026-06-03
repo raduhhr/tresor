@@ -1,0 +1,10 @@
+---
+- name: Stop Tresor Index scheduler
+  community.docker.docker_container:
+    name: "{{ tresor_index_scheduler_container_name }}"
+    state: stopped
+
+- name: Stop Tresor Index database
+  community.docker.docker_container:
+    name: "{{ tresor_index_db_container_name }}"
+    state: stopped

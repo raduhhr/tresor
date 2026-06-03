@@ -12,7 +12,7 @@ paper_gid: 1000
 
 # Runtime
 paper_memory: "8G"
-paper_tz: "UTC"
+paper_tz: "Europe/Bucharest"
 
 # Gameplay/security
 paper_online_mode: "false"            # cracked allowed

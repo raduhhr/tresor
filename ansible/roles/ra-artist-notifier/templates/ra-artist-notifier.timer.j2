@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Resident Advisor artist event notifier
+
+[Timer]
+OnCalendar={{ ra_artist_notifier_timer_on_calendar }}
+RandomizedDelaySec={{ ra_artist_notifier_timer_randomized_delay_seconds }}
+Persistent=true
+Unit={{ ra_artist_notifier_service_name }}.service
+
+[Install]
+WantedBy=timers.target

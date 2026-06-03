@@ -1,8 +1,8 @@
 ---
-# Deploy filebrowser-public — friends 1TB drop at cloud.example.com
+# Deploy filebrowser-public — friends 1TB drop at cloud.raduhhr.xyz
 #
 # Architecture:
-#   internet → cloud.example.com
+#   internet → cloud.raduhhr.xyz
 #   → tresor-vps: nginx (nginx-music role, cloud.conf vhost, LE cert)
 #   → WireGuard (10.66.66.1 → 10.66.66.2:8082)
 #   → filebrowser-public container
@@ -16,7 +16,7 @@
 #   2. public_net exists (run infra/setup-networks.yml if not)
 #   3. WireGuard tunnel up on both ends
 
-- name: Deploy filebrowser-public (friends drop — WG-only, cloud.example.com)
+- name: Deploy filebrowser-public (friends drop — WG-only, cloud.raduhhr.xyz)
   hosts: prod
   gather_facts: true
   become: true

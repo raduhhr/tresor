@@ -2,15 +2,21 @@
 # roles/docker-firewall/tasks/main.yml
 #
 # Manages:
-#   1. DOCKER-USER chain (edge-case rules for containers)
-#   2. INPUT chain hygiene (SSH + extras)
-#   3. Cleanup of orphaned UFW chains and stale rules
-#   4. Persistence via iptables-persistent
+#   1. INPUT chain (rebuilt cleanly on every run)
+#   2. DOCKER-USER chain (edge-case rules for containers)
+#   3. Cleanup of orphaned UFW chain definitions
+#   4. Cleanup of stale Docker nftables raw rules (orphaned bridges)
+#   5. Persistence via iptables-persistent
 #
 # Does NOT manage:
 #   - Docker's own chains (DOCKER, DOCKER-FORWARD, DOCKER-ISOLATION-*)
 #   - NAT/MASQUERADE (Docker handles this)
 #   - Bind addresses (that's in each service's compose template)
+#
+# INPUT rebuild strategy:
+#   Policy is set to ACCEPT before flushing so that the brief empty-chain
+#   window never blocks SSH. Rules are applied fresh, then policy flips to
+#   DROP. This avoids stale persisted rules accumulating across runs.
 
 - name: Install iptables-persistent
   ansible.builtin.apt:
@@ -24,7 +30,7 @@
   when: firewall_persist | bool
   tags: [firewall, firewall:install]
 
-# ── Cleanup orphaned UFW artefacts ──────────────────────────
+# ── Check for orphaned UFW artefacts (early — result used later) ─
 
 - name: Check for orphaned UFW chains
   ansible.builtin.shell: |
@@ -33,90 +39,23 @@
   changed_when: false
   tags: [firewall, firewall:cleanup]
 
-- name: Remove UFW rules from INPUT chain
-  ansible.builtin.shell: |
-    while iptables -S INPUT | grep -q 'ufw-'; do
-      RULE_NUM=$(iptables -L INPUT --line-numbers -n | grep 'ufw-' | head -1 | awk '{print $1}')
-      [ -z "$RULE_NUM" ] && break
-      iptables -D INPUT "$RULE_NUM"
-    done
-  when: _ufw_chain_count.stdout | int > 0
-  changed_when: true
-  tags: [firewall, firewall:cleanup]
+# ── INPUT chain (clean rebuild) ──────────────────────────────────
 
-- name: Remove UFW rules from FORWARD chain
-  ansible.builtin.shell: |
-    while iptables -S FORWARD | grep -q 'ufw-'; do
-      RULE_NUM=$(iptables -L FORWARD --line-numbers -n | grep 'ufw-' | head -1 | awk '{print $1}')
-      [ -z "$RULE_NUM" ] && break
-      iptables -D FORWARD "$RULE_NUM"
-    done
-  when: _ufw_chain_count.stdout | int > 0
-  changed_when: true
-  tags: [firewall, firewall:cleanup]
-
-- name: Flush and delete orphaned UFW chains
-  ansible.builtin.shell: |
-    for chain in $(iptables -S | grep '^-N ufw-' | awk '{print $2}'); do
-      iptables -F "$chain" 2>/dev/null || true
-      iptables -X "$chain" 2>/dev/null || true
-    done
-  when: _ufw_chain_count.stdout | int > 0
-  changed_when: true
-  tags: [firewall, firewall:cleanup]
-
-# ── Cleanup stale NAT rules ────────────────────────────────
-
-- name: Remove stale mc_pub MASQUERADE rules
-  ansible.builtin.shell: |
-    while iptables -t nat -S POSTROUTING | grep -q 'br-mc_pub'; do
-      RULE_NUM=$(iptables -t nat -L POSTROUTING --line-numbers -n | grep 'br-mc_pub' | tail -1 | awk '{print $1}')
-      [ -z "$RULE_NUM" ] && break
-      iptables -t nat -D POSTROUTING "$RULE_NUM"
-    done
-  changed_when: true
-  tags: [firewall, firewall:cleanup]
-
-- name: Remove stale bridge MASQUERADE rules
-  ansible.builtin.shell: |
-    for br in br-lan_pub br-mc_net; do
-      if ! ip link show "$br" &>/dev/null; then
-        while iptables -t nat -S POSTROUTING | grep -q "$br"; do
-          RULE_NUM=$(iptables -t nat -L POSTROUTING --line-numbers -n | grep "$br" | tail -1 | awk '{print $1}')
-          [ -z "$RULE_NUM" ] && break
-          iptables -t nat -D POSTROUTING "$RULE_NUM"
-        done
-      fi
-    done
-  changed_when: false
-  tags: [firewall, firewall:cleanup]
-
-# ── Remove duplicate INPUT rules ───────────────────────────
-
-- name: Remove duplicate INPUT rules
-  ansible.builtin.shell: |
-    while true; do
-      RULE_NUM=$(iptables -L INPUT --line-numbers -n | awk '
-        NR > 2 {
-          num = $1
-          $1 = ""
-          sub(/^ +/, "", $0)
-          seen[$0]++
-          if (seen[$0] > 1) { print num; exit }
-        }
-      ')
-      [ -z "$RULE_NUM" ] && break
-      iptables -D INPUT "$RULE_NUM"
-    done
-  changed_when: false
-  tags: [firewall, firewall:cleanup]
-
-# ── INPUT chain ─────────────────────────────────────────────
-
-- name: Ensure INPUT default policy is DROP
+- name: Set INPUT policy to ACCEPT before flush
   ansible.builtin.iptables:
     chain: INPUT
-    policy: DROP
+    policy: ACCEPT
+  tags: [firewall, firewall:input]
+
+- name: Flush INPUT chain
+  ansible.builtin.iptables:
+    chain: INPUT
+    flush: true
+  tags: [firewall, firewall:input]
+
+- name: Wait for iptables lock to clear after INPUT flush
+  ansible.builtin.pause:
+    seconds: 3
   tags: [firewall, firewall:input]
 
 - name: Allow established/related connections
@@ -162,6 +101,95 @@
     comment: "{{ item.comment | default(omit) }}"
   loop: "{{ input_extra_rules }}"
   tags: [firewall, firewall:input]
+
+- name: Ensure INPUT default policy is DROP
+  ansible.builtin.iptables:
+    chain: INPUT
+    policy: DROP
+  tags: [firewall, firewall:input]
+
+# ── Cleanup orphaned UFW artefacts ──────────────────────────────
+# INPUT was flushed above so UFW jump rules are already gone.
+# This section only needs to remove UFW jumps from FORWARD and
+# delete the now-unreferenced UFW chain definitions.
+
+- name: Remove UFW rules from FORWARD chain
+  ansible.builtin.shell: |
+    while iptables -S FORWARD | grep -q 'ufw-'; do
+      RULE_NUM=$(iptables -L FORWARD --line-numbers -n | grep 'ufw-' | head -1 | awk '{print $1}')
+      [ -z "$RULE_NUM" ] && break
+      iptables -D FORWARD "$RULE_NUM"
+    done
+  when: _ufw_chain_count.stdout | int > 0
+  changed_when: true
+  tags: [firewall, firewall:cleanup]
+
+- name: Flush and delete orphaned UFW chains
+  ansible.builtin.shell: |
+    for chain in $(iptables -S | grep '^-N ufw-' | awk '{print $2}'); do
+      iptables -F "$chain" 2>/dev/null || true
+      iptables -X "$chain" 2>/dev/null || true
+    done
+  when: _ufw_chain_count.stdout | int > 0
+  changed_when: true
+  tags: [firewall, firewall:cleanup]
+
+# ── Cleanup stale Docker nftables raw rules ─────────────────
+# Docker 28 manages a nftables raw/PREROUTING table for per-container IP
+# isolation. When a network is deleted or recreated with a new bridge name,
+# Docker can leave behind orphaned rules that reference the old bridge
+# interface (e.g. br-ec45589dd344). These stale rules silently DROP traffic
+# to container IPs from any interface other than the now-deleted old bridge,
+# breaking inter-container connectivity on the surviving network.
+#
+# Fix: if any rule references a bridge interface that no longer exists,
+# flush the raw table and restart Docker (live-restore keeps containers up)
+# so Docker regenerates correct rules for the current networks only.
+
+- name: Flush stale Docker nftables raw rules for orphaned bridges
+  ansible.builtin.shell: |
+    stale=false
+    while IFS= read -r iface; do
+      [ -z "$iface" ] && continue
+      ip link show "$iface" &>/dev/null || { stale=true; break; }
+    done < <(nft list table ip raw 2>/dev/null | grep -oP 'iifname != "\K[^"]+' | sort -u)
+    if $stale; then
+      nft flush table ip raw
+      systemctl restart docker
+      sleep 3
+      echo changed
+    else
+      echo ok
+    fi
+  register: _docker_nft_cleanup
+  changed_when: "'changed' in _docker_nft_cleanup.stdout"
+  tags: [firewall, firewall:cleanup]
+
+# ── Cleanup stale NAT rules ────────────────────────────────
+
+- name: Remove stale mc_pub MASQUERADE rules
+  ansible.builtin.shell: |
+    while iptables -t nat -S POSTROUTING | grep -q 'br-mc_pub'; do
+      RULE_NUM=$(iptables -t nat -L POSTROUTING --line-numbers -n | grep 'br-mc_pub' | tail -1 | awk '{print $1}')
+      [ -z "$RULE_NUM" ] && break
+      iptables -t nat -D POSTROUTING "$RULE_NUM"
+    done
+  changed_when: true
+  tags: [firewall, firewall:cleanup]
+
+- name: Remove stale bridge MASQUERADE rules
+  ansible.builtin.shell: |
+    for br in br-lan_pub; do
+      if ! ip link show "$br" &>/dev/null; then
+        while iptables -t nat -S POSTROUTING | grep -q "$br"; do
+          RULE_NUM=$(iptables -t nat -L POSTROUTING --line-numbers -n | grep "$br" | tail -1 | awk '{print $1}')
+          [ -z "$RULE_NUM" ] && break
+          iptables -t nat -D POSTROUTING "$RULE_NUM"
+        done
+      fi
+    done
+  changed_when: false
+  tags: [firewall, firewall:cleanup]
 
 # ── DOCKER-USER chain ───────────────────────────────────────
 

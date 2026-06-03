@@ -1,0 +1,491 @@
+---
+- name: Backfill existing Satelite Watcher recordings through decode pipeline
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_bulk_config_file: /opt/satelite-watcher/config/config.yml
+    satelite_watcher_bulk_user: satelite-watcher
+    satelite_watcher_bulk_group: satelite-watcher
+    satelite_watcher_bulk_home: /opt/satelite-watcher
+    satelite_watcher_bulk_xdg_config_home: /opt/satelite-watcher/.config
+    satelite_watcher_bulk_match: "{{ raw_match | default('*.cs16') }}"
+    satelite_watcher_bulk_exclude_tests: "{{ exclude_tests | default(true) }}"
+    satelite_watcher_bulk_force: "{{ force | default(false) }}"
+    satelite_watcher_bulk_limit: "{{ limit | default(0) }}"
+    satelite_watcher_bulk_dry_run: "{{ dry_run | default(false) }}"
+    satelite_watcher_bulk_fail_on_decode_error: "{{ fail_on_decode_error | default(false) }}"
+    satelite_watcher_bulk_satellite_name: "{{ satellite | default('unknown') }}"
+    satelite_watcher_bulk_pipeline_override: "{{ satelite_watcher_bulk_pipeline | default(pipeline | default('')) }}"
+    satelite_watcher_bulk_source_mode_override: "{{ satelite_watcher_bulk_source_mode | default(source_mode | default('')) }}"
+    satelite_watcher_bulk_freq_shift_override: "{{ freq_shift | default('') }}"
+    satelite_watcher_bulk_dc_block_override: "{{ dc_block | default('') }}"
+    satelite_watcher_bulk_iq_swap_override: "{{ iq_swap | default('') }}"
+
+  tasks:
+    - name: Read deployed Satelite Watcher config
+      ansible.builtin.slurp:
+        src: "{{ satelite_watcher_bulk_config_file }}"
+      register: satelite_watcher_bulk_config_raw
+
+    - name: Parse deployed Satelite Watcher config
+      ansible.builtin.set_fact:
+        satelite_watcher_bulk_config: "{{ satelite_watcher_bulk_config_raw.content | b64decode | from_yaml }}"
+
+    - name: Build bulk pipeline config
+      ansible.builtin.set_fact:
+        satelite_watcher_bulk_output_root: "{{ satelite_watcher_bulk_config.paths.output_base_dir | default(satelite_watcher_bulk_config.paths.recordings_dir) }}"
+        satelite_watcher_bulk_decode_cfg: "{{ satelite_watcher_bulk_config.get('decode', {}).get('satelite_watcher_after_record', {}) }}"
+        satelite_watcher_bulk_baseband_format: "{{ satelite_watcher_bulk_config.sdr.baseband_format }}"
+        satelite_watcher_bulk_samplerate: "{{ satelite_watcher_bulk_config.sdr.samplerate }}"
+        satelite_watcher_bulk_pipeline_selected: "{{ satelite_watcher_bulk_pipeline_override if (satelite_watcher_bulk_pipeline_override | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('pipeline', 'meteor_m2-x_lrpt')) }}"
+        satelite_watcher_bulk_source_mode_selected: "{{ satelite_watcher_bulk_source_mode_override if (satelite_watcher_bulk_source_mode_override | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('source_mode', 'baseband')) }}"
+        satelite_watcher_bulk_freq_shift_selected: "{{ satelite_watcher_bulk_freq_shift_override if (satelite_watcher_bulk_freq_shift_override | string | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('freq_shift_hz', 0)) }}"
+        satelite_watcher_bulk_dc_block_selected: "{{ satelite_watcher_bulk_dc_block_override if (satelite_watcher_bulk_dc_block_override | string | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('dc_block', false)) }}"
+        satelite_watcher_bulk_iq_swap_selected: "{{ satelite_watcher_bulk_iq_swap_override if (satelite_watcher_bulk_iq_swap_override | string | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('iq_swap', false)) }}"
+        satelite_watcher_bulk_decode_dir_name: "{{ satelite_watcher_bulk_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('output_dir_name', 'decoded') }}"
+        satelite_watcher_bulk_images_dir_name: "{{ satelite_watcher_bulk_config.get('decode', {}).get('image_after_decode', {}).get('output_dir_name', 'images') }}"
+        satelite_watcher_bulk_noaa_pipeline_selected: "{{ satelite_watcher_bulk_pipeline_override if (satelite_watcher_bulk_pipeline_override | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('noaa_apt', {}).get('pipeline', 'noaa_apt')) }}"
+        satelite_watcher_bulk_noaa_source_mode_selected: "{{ satelite_watcher_bulk_source_mode_override if (satelite_watcher_bulk_source_mode_override | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('noaa_apt', {}).get('source_mode', 'baseband')) }}"
+        satelite_watcher_bulk_noaa_freq_shift_selected: "{{ satelite_watcher_bulk_freq_shift_override if (satelite_watcher_bulk_freq_shift_override | string | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('noaa_apt', {}).get('freq_shift_hz', 0)) }}"
+        satelite_watcher_bulk_noaa_dc_block_selected: "{{ satelite_watcher_bulk_dc_block_override if (satelite_watcher_bulk_dc_block_override | string | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('noaa_apt', {}).get('dc_block', false)) }}"
+        satelite_watcher_bulk_noaa_iq_swap_selected: "{{ satelite_watcher_bulk_iq_swap_override if (satelite_watcher_bulk_iq_swap_override | string | trim | length) > 0 else (satelite_watcher_bulk_config.get('decode', {}).get('noaa_apt', {}).get('iq_swap', false)) }}"
+        satelite_watcher_bulk_noaa_decode_dir_name: "{{ satelite_watcher_bulk_config.get('decode', {}).get('noaa_apt', {}).get('output_dir_name', 'decoded') }}"
+
+    - name: Backfill matching Satelite Watcher recordings
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import fnmatch
+        import json
+        import os
+        import pwd
+        import shutil
+        import subprocess
+        from datetime import datetime
+        from pathlib import Path
+
+        output_root = Path(os.environ["SATELITE_WATCHER_OUTPUT_ROOT"])
+        raw_match = os.environ["SATELITE_WATCHER_RAW_MATCH"]
+        exclude_tests = os.environ["SATELITE_WATCHER_EXCLUDE_TESTS"].lower() == "true"
+        force = os.environ["SATELITE_WATCHER_FORCE"].lower() == "true"
+        dry_run = os.environ["SATELITE_WATCHER_DRY_RUN"].lower() == "true"
+        limit = int(os.environ["SATELITE_WATCHER_LIMIT"])
+        user = os.environ["SATELITE_WATCHER_USER"]
+        group = os.environ["SATELITE_WATCHER_GROUP"]
+        home = os.environ["SATELITE_WATCHER_HOME"]
+        xdg_config_home = os.environ["SATELITE_WATCHER_XDG_CONFIG_HOME"]
+        satdump_bin = os.environ["SATELITE_WATCHER_SATDUMP_BIN"]
+        pipeline = os.environ["SATELITE_WATCHER_PIPELINE"]
+        source_mode = os.environ["SATELITE_WATCHER_SOURCE_MODE"]
+        freq_shift = os.environ["SATELITE_WATCHER_FREQ_SHIFT"]
+        dc_block = os.environ["SATELITE_WATCHER_DC_BLOCK"].lower() == "true"
+        iq_swap = os.environ["SATELITE_WATCHER_IQ_SWAP"].lower() == "true"
+        noaa_pipeline = os.environ["SATELITE_WATCHER_NOAA_PIPELINE"]
+        noaa_source_mode = os.environ["SATELITE_WATCHER_NOAA_SOURCE_MODE"]
+        noaa_freq_shift = os.environ["SATELITE_WATCHER_NOAA_FREQ_SHIFT"]
+        noaa_dc_block = os.environ["SATELITE_WATCHER_NOAA_DC_BLOCK"].lower() == "true"
+        noaa_iq_swap = os.environ["SATELITE_WATCHER_NOAA_IQ_SWAP"].lower() == "true"
+        samplerate = os.environ["SATELITE_WATCHER_SAMPLERATE"]
+        baseband_format = os.environ["SATELITE_WATCHER_BASEBAND_FORMAT"]
+        decode_dir_name = os.environ["SATELITE_WATCHER_DECODE_DIR_NAME"]
+        noaa_decode_dir_name = os.environ["SATELITE_WATCHER_NOAA_DECODE_DIR_NAME"]
+        images_dir_name = os.environ["SATELITE_WATCHER_IMAGES_DIR_NAME"]
+        satellite_name = os.environ["SATELITE_WATCHER_SATELLITE_NAME"]
+        image_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+
+        try:
+            uid = pwd.getpwnam(user).pw_uid
+            gid = pwd.getpwnam(user).pw_gid
+        except KeyError:
+            uid = gid = None
+
+        def as_bool(value):
+            return "true" if value else "false"
+
+        def rel_parts(path):
+            try:
+                return path.relative_to(output_root).parts
+            except ValueError:
+                return path.parts
+
+        def is_test_path(path):
+            return any(part.startswith("test_") for part in rel_parts(path))
+
+        def chown_if_possible(path):
+            if uid is None or gid is None:
+                return
+            try:
+                os.chown(path, uid, gid)
+            except PermissionError:
+                pass
+            except FileNotFoundError:
+                pass
+
+        def any_file(path):
+            if not path.exists():
+                return False
+            return any(child.is_file() for child in path.rglob("*"))
+
+        def first_file(path):
+            if not path.exists():
+                return ""
+            for child in sorted(path.rglob("*")):
+                if child.is_file():
+                    return str(child)
+            return ""
+
+        def image_files(path):
+            if not path.exists():
+                return []
+            return [
+                child
+                for child in sorted(path.rglob("*"))
+                if child.is_file() and child.suffix.lower() in image_exts
+            ]
+
+        def infer_satellite_name(raw_path):
+            name = raw_path.name.lower()
+            if "meteor-m-n2-3" in name:
+                return "METEOR-M N2-3"
+            if "meteor-m-n2-4" in name:
+                return "METEOR-M N2-4"
+            if "noaa-15" in name:
+                return "NOAA-15"
+            if "noaa-18" in name:
+                return "NOAA-18"
+            if "noaa-19" in name:
+                return "NOAA-19"
+            return satellite_name
+
+        def decode_options_for(satellite):
+            if satellite.startswith("NOAA-"):
+                return {
+                    "decode_profile": "noaa_apt",
+                    "pipeline": noaa_pipeline,
+                    "source_mode": noaa_source_mode,
+                    "freq_shift": noaa_freq_shift,
+                    "dc_block": noaa_dc_block,
+                    "iq_swap": noaa_iq_swap,
+                    "decode_dir_name": noaa_decode_dir_name,
+                }
+            return {
+                "decode_profile": "meteor_lrpt",
+                "pipeline": pipeline,
+                "source_mode": source_mode,
+                "freq_shift": freq_shift,
+                "dc_block": dc_block,
+                "iq_swap": iq_swap,
+                "decode_dir_name": decode_dir_name,
+            }
+
+        def run_info(raw_path):
+            stat = raw_path.stat()
+            stamp = datetime.fromtimestamp(stat.st_mtime)
+            stem = raw_path.stem
+            inferred_satellite = infer_satellite_name(raw_path)
+            decode_options = decode_options_for(inferred_satellite)
+            run_dir = output_root / stamp.strftime("%B %Y") / stamp.strftime("%Y-%m-%d") / stem
+            return {
+                "raw_source": raw_path,
+                "raw_size": stat.st_size,
+                "run_dir": run_dir,
+                "run_raw": run_dir / raw_path.name,
+                "decode_dir": run_dir / decode_options["decode_dir_name"],
+                "images_dir": run_dir / images_dir_name,
+                "metadata": run_dir / "metadata.json",
+                "log_file": run_dir / "satdump-decode.log",
+                "satellite": inferred_satellite,
+                "decode_options": decode_options,
+            }
+
+        def discover():
+            seen = {}
+            for dirpath, dirnames, filenames in os.walk(output_root):
+                current = Path(dirpath)
+                parts = rel_parts(current)
+                dirnames[:] = [
+                    dirname for dirname in dirnames
+                    if dirname not in {decode_dir_name, images_dir_name}
+                    and not (exclude_tests and dirname.startswith("test_"))
+                ]
+                if exclude_tests and any(part.startswith("test_") for part in parts):
+                    dirnames[:] = []
+                    continue
+                for filename in filenames:
+                    if not fnmatch.fnmatch(filename, raw_match):
+                        continue
+                    path = current / filename
+                    if exclude_tests and is_test_path(path):
+                        continue
+                    try:
+                        stat = path.stat()
+                    except FileNotFoundError:
+                        continue
+                    if stat.st_size <= 0:
+                        continue
+                    key = (stat.st_dev, stat.st_ino)
+                    organized = path.parent.name == path.stem
+                    previous = seen.get(key)
+                    if previous is None or (organized and not previous["organized"]):
+                        seen[key] = {
+                            "path": path,
+                            "mtime": stat.st_mtime,
+                            "organized": organized,
+                        }
+            return [item["path"] for item in sorted(seen.values(), key=lambda item: item["mtime"])]
+
+        def write_json(path, payload):
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            chown_if_possible(path)
+
+        def ensure_dirs(info):
+            for path in (info["run_dir"], info["decode_dir"], info["images_dir"]):
+                path.mkdir(parents=True, exist_ok=True)
+                chown_if_possible(path)
+
+        def link_raw(info):
+            src = info["raw_source"]
+            dst = info["run_raw"]
+            if src == dst or dst.exists():
+                return
+            try:
+                os.link(src, dst)
+            except OSError:
+                os.symlink(src, dst)
+
+        def run_decode(info):
+            decode_options = info["decode_options"]
+            runuser = shutil.which("runuser") or "/usr/sbin/runuser"
+            cmd = [
+                runuser,
+                "-u",
+                user,
+                "--",
+                "env",
+                f"HOME={home}",
+                f"XDG_CONFIG_HOME={xdg_config_home}",
+                satdump_bin,
+                decode_options["pipeline"],
+                decode_options["source_mode"],
+                str(info["run_raw"]),
+                str(info["decode_dir"]),
+                "--samplerate",
+                samplerate,
+                "--baseband_format",
+                baseband_format,
+            ]
+            if decode_options["freq_shift"] and decode_options["freq_shift"] != "0":
+                cmd.extend(["--freq_shift", decode_options["freq_shift"]])
+            if decode_options["dc_block"]:
+                cmd.append("--dc_block")
+            if decode_options["iq_swap"]:
+                cmd.append("--iq_swap")
+            with info["log_file"].open("w", encoding="utf-8", errors="replace") as log:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=home,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                    text=True,
+                )
+            chown_if_possible(info["log_file"])
+            return proc.returncode
+
+        def collect_images(info):
+            collected = []
+            info["images_dir"].mkdir(parents=True, exist_ok=True)
+            for source in image_files(info["decode_dir"]):
+                target = info["images_dir"] / source.name
+                if not target.exists():
+                    shutil.copy2(source, target)
+                    chown_if_possible(target)
+                collected.append(str(target))
+            manifest = info["images_dir"] / "manifest.json"
+            write_json(manifest, {"images": sorted(set(collected))})
+            return sorted(set(collected))
+
+        candidates = discover()
+        selected = candidates[:limit] if limit > 0 else candidates
+        processed = []
+        skipped = []
+        failed = []
+
+        for raw_path in selected:
+            info = run_info(raw_path)
+            decoded_before = any_file(info["decode_dir"])
+            if decoded_before and not force:
+                skipped.append({
+                    "raw_source": str(raw_path),
+                    "run_dir": str(info["run_dir"]),
+                    "reason": "decoded output already exists",
+                })
+                continue
+
+            if dry_run:
+                skipped.append({
+                    "raw_source": str(raw_path),
+                    "run_dir": str(info["run_dir"]),
+                    "reason": "dry run",
+                })
+                continue
+
+            ensure_dirs(info)
+            link_raw(info)
+            decode_options = info["decode_options"]
+            write_json(info["metadata"], {
+                "baseband_format": baseband_format,
+                "decode_profile": decode_options["decode_profile"],
+                "decode_output_dir": str(info["decode_dir"]),
+                "images_output_dir": str(info["images_dir"]),
+                "kind": "bulk_manual_pipeline",
+                "pipeline": decode_options["pipeline"],
+                "freq_shift": decode_options["freq_shift"],
+                "dc_block": decode_options["dc_block"],
+                "iq_swap": decode_options["iq_swap"],
+                "raw_file": str(info["run_raw"]),
+                "raw_size_bytes": info["raw_size"],
+                "raw_source": str(raw_path),
+                "run_dir": str(info["run_dir"]),
+                "samplerate": int(samplerate),
+                "satellite": info["satellite"],
+                "source_mode": decode_options["source_mode"],
+                "started_from_playbook": "satelite-watcher/process-recordings.yml",
+            })
+
+            rc = run_decode(info)
+            decoded_first = first_file(info["decode_dir"])
+            collected_images = collect_images(info)
+            image_first = collected_images[0] if collected_images else ""
+            payload = {
+                "baseband_format": baseband_format,
+                "decode_first_file": decoded_first,
+                "decode_profile": decode_options["decode_profile"],
+                "decode_output_dir": str(info["decode_dir"]),
+                "decode_return_code": rc,
+                "decode_stage": "success" if rc == 0 and decoded_first else "failed",
+                "image_first_file": image_first,
+                "image_note": "image file collected" if image_first else "SatDump did not emit image files for this capture",
+                "image_stage": "success" if image_first else "none",
+                "images_output_dir": str(info["images_dir"]),
+                "kind": "bulk_manual_pipeline",
+                "log_file": str(info["log_file"]),
+                "pipeline": decode_options["pipeline"],
+                "freq_shift": decode_options["freq_shift"],
+                "dc_block": decode_options["dc_block"],
+                "iq_swap": decode_options["iq_swap"],
+                "raw_file": str(info["run_raw"]),
+                "raw_size_bytes": info["raw_size"],
+                "raw_source": str(raw_path),
+                "run_dir": str(info["run_dir"]),
+                "samplerate": int(samplerate),
+                "satellite": info["satellite"],
+                "source_mode": decode_options["source_mode"],
+                "started_from_playbook": "satelite-watcher/process-recordings.yml",
+            }
+            write_json(info["metadata"], payload)
+
+            result = {
+                "raw_source": str(raw_path),
+                "run_dir": str(info["run_dir"]),
+                "decoded": str(info["decode_dir"]),
+                "decode_first_file": decoded_first,
+                "images": str(info["images_dir"]),
+                "image_first_file": image_first,
+                "metadata": str(info["metadata"]),
+                "log_file": str(info["log_file"]),
+                "decode_profile": decode_options["decode_profile"],
+                "pipeline": decode_options["pipeline"],
+            }
+            if payload["decode_stage"] == "failed":
+                failed.append(result)
+            else:
+                processed.append(result)
+
+        summary = {
+            "candidate_count": len(candidates),
+            "selected_count": len(selected),
+            "processed_count": len(processed),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
+            "dry_run": dry_run,
+            "force": force,
+            "pipeline": pipeline,
+            "noaa_pipeline": noaa_pipeline,
+            "freq_shift": freq_shift,
+            "noaa_freq_shift": noaa_freq_shift,
+            "dc_block": dc_block,
+            "noaa_dc_block": noaa_dc_block,
+            "iq_swap": iq_swap,
+            "noaa_iq_swap": noaa_iq_swap,
+            "raw_match": raw_match,
+            "source_mode": source_mode,
+            "noaa_source_mode": noaa_source_mode,
+            "exclude_tests": exclude_tests,
+            "processed": processed,
+            "skipped": skipped,
+            "failed": failed,
+        }
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        SATELITE_WATCHER_OUTPUT_ROOT: "{{ satelite_watcher_bulk_output_root }}"
+        SATELITE_WATCHER_RAW_MATCH: "{{ satelite_watcher_bulk_match }}"
+        SATELITE_WATCHER_EXCLUDE_TESTS: "{{ (satelite_watcher_bulk_exclude_tests | bool) | ternary('true', 'false') }}"
+        SATELITE_WATCHER_FORCE: "{{ (satelite_watcher_bulk_force | bool) | ternary('true', 'false') }}"
+        SATELITE_WATCHER_DRY_RUN: "{{ (satelite_watcher_bulk_dry_run | bool) | ternary('true', 'false') }}"
+        SATELITE_WATCHER_LIMIT: "{{ satelite_watcher_bulk_limit | string }}"
+        SATELITE_WATCHER_USER: "{{ satelite_watcher_bulk_user }}"
+        SATELITE_WATCHER_GROUP: "{{ satelite_watcher_bulk_group }}"
+        SATELITE_WATCHER_HOME: "{{ satelite_watcher_bulk_home }}"
+        SATELITE_WATCHER_XDG_CONFIG_HOME: "{{ satelite_watcher_bulk_xdg_config_home }}"
+        SATELITE_WATCHER_SATDUMP_BIN: "{{ satelite_watcher_bulk_config.satdump_bin }}"
+        SATELITE_WATCHER_PIPELINE: "{{ satelite_watcher_bulk_pipeline_selected }}"
+        SATELITE_WATCHER_SOURCE_MODE: "{{ satelite_watcher_bulk_source_mode_selected }}"
+        SATELITE_WATCHER_FREQ_SHIFT: "{{ satelite_watcher_bulk_freq_shift_selected | string }}"
+        SATELITE_WATCHER_DC_BLOCK: "{{ (satelite_watcher_bulk_dc_block_selected | bool) | ternary('true', 'false') }}"
+        SATELITE_WATCHER_IQ_SWAP: "{{ (satelite_watcher_bulk_iq_swap_selected | bool) | ternary('true', 'false') }}"
+        SATELITE_WATCHER_NOAA_PIPELINE: "{{ satelite_watcher_bulk_noaa_pipeline_selected }}"
+        SATELITE_WATCHER_NOAA_SOURCE_MODE: "{{ satelite_watcher_bulk_noaa_source_mode_selected }}"
+        SATELITE_WATCHER_NOAA_FREQ_SHIFT: "{{ satelite_watcher_bulk_noaa_freq_shift_selected | string }}"
+        SATELITE_WATCHER_NOAA_DC_BLOCK: "{{ (satelite_watcher_bulk_noaa_dc_block_selected | bool) | ternary('true', 'false') }}"
+        SATELITE_WATCHER_NOAA_IQ_SWAP: "{{ (satelite_watcher_bulk_noaa_iq_swap_selected | bool) | ternary('true', 'false') }}"
+        SATELITE_WATCHER_SAMPLERATE: "{{ satelite_watcher_bulk_samplerate | string }}"
+        SATELITE_WATCHER_BASEBAND_FORMAT: "{{ satelite_watcher_bulk_baseband_format }}"
+        SATELITE_WATCHER_DECODE_DIR_NAME: "{{ satelite_watcher_bulk_decode_dir_name }}"
+        SATELITE_WATCHER_NOAA_DECODE_DIR_NAME: "{{ satelite_watcher_bulk_noaa_decode_dir_name }}"
+        SATELITE_WATCHER_IMAGES_DIR_NAME: "{{ satelite_watcher_bulk_images_dir_name }}"
+        SATELITE_WATCHER_SATELLITE_NAME: "{{ satelite_watcher_bulk_satellite_name }}"
+      register: satelite_watcher_bulk_result
+      changed_when: (satelite_watcher_bulk_result.stdout | from_json).processed_count | int > 0
+      failed_when: >-
+        (satelite_watcher_bulk_fail_on_decode_error | bool)
+        and ((satelite_watcher_bulk_result.stdout | from_json).failed_count | int > 0)
+
+    - name: Parse bulk pipeline result
+      ansible.builtin.set_fact:
+        satelite_watcher_bulk_summary: "{{ satelite_watcher_bulk_result.stdout | from_json }}"
+
+    - name: Display bulk pipeline summary
+      ansible.builtin.debug:
+        msg:
+          raw_match: "{{ satelite_watcher_bulk_summary.raw_match }}"
+          candidates: "{{ satelite_watcher_bulk_summary.candidate_count }}"
+          selected: "{{ satelite_watcher_bulk_summary.selected_count }}"
+          processed: "{{ satelite_watcher_bulk_summary.processed_count }}"
+          skipped: "{{ satelite_watcher_bulk_summary.skipped_count }}"
+          failed: "{{ satelite_watcher_bulk_summary.failed_count }}"
+          dry_run: "{{ satelite_watcher_bulk_summary.dry_run }}"
+          force: "{{ satelite_watcher_bulk_summary.force }}"
+          pipeline: "{{ satelite_watcher_bulk_summary.pipeline }}"
+          source_mode: "{{ satelite_watcher_bulk_summary.source_mode }}"
+          freq_shift: "{{ satelite_watcher_bulk_summary.freq_shift }}"
+          dc_block: "{{ satelite_watcher_bulk_summary.dc_block }}"
+          iq_swap: "{{ satelite_watcher_bulk_summary.iq_swap }}"
+          processed_runs: "{{ satelite_watcher_bulk_summary.processed | map(attribute='run_dir') | list }}"
+          skipped_runs: "{{ satelite_watcher_bulk_summary.skipped | map(attribute='run_dir') | list }}"
+          failed_runs: "{{ satelite_watcher_bulk_summary.failed | map(attribute='run_dir') | list }}"

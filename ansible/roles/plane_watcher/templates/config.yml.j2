@@ -1,0 +1,55 @@
+runtime:
+  enabled: {{ 'true' if plane_watcher_enabled | bool else 'false' }}
+  container_name: {{ plane_watcher_container_name }}
+  satelite_watcher_recording_paused: {{ 'true' if plane_watcher_pause_satelite_watcher_recording | bool else 'false' }}
+
+paths:
+  config_dir: {{ plane_watcher_config_dir }}
+  data_dir: {{ plane_watcher_data_dir }}
+  globe_history_dir: {{ plane_watcher_globe_history_dir }}
+  graphs1090_dir: {{ plane_watcher_graphs1090_dir }}
+
+ui:
+  bind_address: {{ plane_watcher_bind_addr }}
+  port: {{ plane_watcher_host_port }}
+  container_port: {{ plane_watcher_container_port }}
+  url: {{ ((plane_watcher_enable_traefik | bool) and (plane_watcher_public_host | string | length > 0)) | ternary("https://" ~ plane_watcher_public_host, "http://" ~ plane_watcher_bind_addr ~ ":" ~ (plane_watcher_host_port | string)) | to_json }}
+
+location:
+  latitude: {{ plane_watcher_location_latitude }}
+  longitude: {{ plane_watcher_location_longitude }}
+  altitude_m: {{ plane_watcher_location_altitude_m }}
+  timezone: {{ plane_watcher_timezone }}
+
+sdr:
+  device_type: {{ plane_watcher_sdr_device_type }}
+  device_serial: "{{ plane_watcher_sdr_device_serial }}"
+  gain: {{ plane_watcher_readsb_gain | to_json }}
+  ppm: {{ plane_watcher_readsb_ppm | to_json }}
+
+ultrafeeder:
+  image: {{ plane_watcher_image }}
+  loglevel: {{ plane_watcher_loglevel }}
+  feeder_name: {{ plane_watcher_feeder_name | to_json }}
+  config: {{ plane_watcher_ultrafeeder_config | to_json }}
+  tar1090_page_title: {{ plane_watcher_tar1090_page_title | to_json }}
+  tar1090_display_units: {{ plane_watcher_tar1090_display_units }}
+  tar1090_enable_ac_db: {{ 'true' if plane_watcher_tar1090_enable_ac_db | bool else 'false' }}
+  tar1090_flightaware_links: {{ 'true' if plane_watcher_tar1090_flightaware_links | bool else 'false' }}
+  tar1090_site_show: {{ 'true' if plane_watcher_tar1090_site_show | bool else 'false' }}
+  tar1090_planecount_in_title: {{ 'true' if plane_watcher_tar1090_planecount_in_title | bool else 'false' }}
+  tar1090_message_rate_in_title: {{ 'true' if plane_watcher_tar1090_message_rate_in_title | bool else 'false' }}
+  graphs1090_dark_mode: {{ 'true' if plane_watcher_graphs1090_dark_mode | bool else 'false' }}
+  prometheus_enable: {{ 'true' if plane_watcher_prometheus_enable | bool else 'false' }}
+
+docker:
+  networks:
+    - {{ plane_watcher_network_primary }}
+{% if plane_watcher_network_publish | string | length > 0 %}
+    - {{ plane_watcher_network_publish }}
+{% endif %}
+  traefik:
+    enabled: {{ 'true' if plane_watcher_enable_traefik | bool else 'false' }}
+    public_host: {{ plane_watcher_public_host | to_json }}
+    entrypoint: {{ plane_watcher_traefik_entrypoint | to_json }}
+    middlewares: {{ plane_watcher_traefik_middlewares | to_json }}

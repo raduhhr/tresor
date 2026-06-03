@@ -26,7 +26,7 @@ paper_backend_port: 25565
 
 # Timezone & MOTD
 velocity_tz: "UTC"
-velocity_motd: "Velocity proxy, you are being routed through Germany"
+velocity_motd: "Welcome to Tresor Minecraft Server"
 velocity_show_ping_requests: true
 velocity_player_limit: 50
 velocity_compression_level: 1

@@ -1,0 +1,6 @@
+---
+- name: restart plane watcher container
+  community.docker.docker_container:
+    name: "{{ plane_watcher_container_name }}"
+    state: started
+    restart: true

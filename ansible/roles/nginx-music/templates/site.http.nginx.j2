@@ -1,0 +1,18 @@
+# Managed by Ansible: nginx-music role / {{ nginx_site_config_name }} (HTTP bootstrap)
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name {{ ([nginx_site_domain] + nginx_site_aliases) | join(' ') }};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  root {{ nginx_site_root }};
+  index index.html;
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}

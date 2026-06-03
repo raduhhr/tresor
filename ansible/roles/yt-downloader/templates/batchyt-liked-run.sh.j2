@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+set -a
+source /etc/batchyt-liked.env
+set +a
+
+export PATH="{{ batchyt_venv_dir }}/bin:$PATH"
+
+run_output="$(mktemp)"
+cleanup() {
+  rm -f "$run_output"
+}
+trap cleanup EXIT
+
+status=0
+"{{ batchyt_venv_dir }}/bin/python" "{{ batchyt_app_dir }}/batch_yt_downloader.py" 2>&1 | tee "$run_output" || status="${PIPESTATUS[0]}"
+
+downloaded="$(
+  awk '
+    /Downloaded:/ { value=$NF }
+    END {
+      if (value ~ /^[0-9]+$/) print value;
+      else print 0;
+    }
+  ' "$run_output"
+)"
+playlist_updated=0
+if grep -q "Playlist order file:" "$run_output"; then
+  playlist_updated=1
+fi
+
+if [ "$status" -ne 0 ]; then
+  echo "[batchyt-liked] downloader exited with status $status; skipping Jellyfin refresh"
+  exit "$status"
+fi
+
+if [ "${BATCHYT_JELLYFIN_REFRESH_ENABLED:-0}" != "1" ]; then
+  echo "[batchyt-liked] Jellyfin refresh disabled"
+  exit 0
+fi
+
+if [ "$downloaded" -eq 0 ] && [ "$playlist_updated" -eq 0 ] && [ "${BATCHYT_JELLYFIN_REFRESH_ALWAYS:-0}" != "1" ]; then
+  echo "[batchyt-liked] no new downloads or playlist changes; Jellyfin refresh skipped"
+  exit 0
+fi
+
+if [ -z "${BATCHYT_JELLYFIN_API_KEY:-}" ]; then
+  echo "[batchyt-liked] Jellyfin API key missing; refresh skipped"
+  exit 0
+fi
+
+echo "[batchyt-liked] triggering Jellyfin library refresh (${downloaded} new downloads, playlist_updated=${playlist_updated})"
+curl -fsS \
+  -X POST \
+  -H "X-Emby-Token: ${BATCHYT_JELLYFIN_API_KEY}" \
+  "${BATCHYT_JELLYFIN_URL%/}/Library/Refresh" >/dev/null
+echo "[batchyt-liked] Jellyfin library refresh requested"

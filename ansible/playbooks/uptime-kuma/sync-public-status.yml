@@ -1,0 +1,113 @@
+---
+- name: Sync Uptime Kuma public status page monitors
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    _uptime_kuma_config_dir: "{{ hostvars[inventory_hostname].uptime_kuma_config_dir | default('/mnt/ssd/configs/uptime-kuma') }}"
+    _uptime_kuma_sync_username: "{{ hostvars[inventory_hostname].uptime_kuma_sync_username | default('admin') }}"
+    _uptime_kuma_public_status_slug: "{{ hostvars[inventory_hostname].uptime_kuma_public_status_slug | default('tresor') }}"
+    _uptime_kuma_public_status_title: "{{ hostvars[inventory_hostname].uptime_kuma_public_status_title | default('Tresor Status') }}"
+    _uptime_kuma_public_group_name: "{{ hostvars[inventory_hostname].uptime_kuma_public_group_name | default('Public Services') }}"
+    _uptime_kuma_public_monitors: "{{ hostvars[inventory_hostname].uptime_kuma_public_monitors | default([]) }}"
+    uptime_kuma_sync_dir: "{{ _uptime_kuma_config_dir }}/sync"
+    uptime_kuma_sync_venv_dir: "{{ uptime_kuma_sync_dir }}/venv"
+
+  tasks:
+    - name: Derive effective Kuma sync password from vars or env
+      no_log: true
+      ansible.builtin.set_fact:
+        _uptime_kuma_sync_password: >-
+          {{
+            hostvars[inventory_hostname].uptime_kuma_sync_password
+            | default('')
+            | default(lookup('env', 'UPTIME_KUMA_PASSWORD') | default('', true), true)
+          }}
+
+    - name: Assert public monitors are configured
+      ansible.builtin.assert:
+        that:
+          - _uptime_kuma_public_monitors | length > 0
+        fail_msg: "No uptime_kuma_public_monitors configured."
+
+    - name: Assert Kuma sync password is present
+      no_log: true
+      ansible.builtin.assert:
+        that:
+          - _uptime_kuma_sync_password | length > 0
+        fail_msg: "Set uptime_kuma_sync_password or export UPTIME_KUMA_PASSWORD before running this playbook."
+
+    - name: Gather Uptime Kuma container info
+      community.docker.docker_container_info:
+        name: uptime-kuma
+      register: _kuma_info
+
+    - name: Assert Uptime Kuma container is running
+      ansible.builtin.assert:
+        that:
+          - _kuma_info.exists
+          - _kuma_info.container.State.Running
+        fail_msg: "Uptime Kuma container is not running."
+
+    - name: Derive Uptime Kuma internal API URL from public_net IP
+      ansible.builtin.set_fact:
+        _uptime_kuma_api_url: >-
+          http://{{ _kuma_info.container.NetworkSettings.Networks.public_net.IPAddress }}:3001
+
+    - name: Assert Uptime Kuma has a public_net IP
+      ansible.builtin.assert:
+        that:
+          - _kuma_info.container.NetworkSettings.Networks.public_net.IPAddress | length > 0
+        fail_msg: "Uptime Kuma is missing a public_net IP address."
+
+    - name: Ensure python3-venv is installed
+      ansible.builtin.apt:
+        name: python3-venv
+        state: present
+        update_cache: true
+
+    - name: Ensure Uptime Kuma sync directory exists
+      ansible.builtin.file:
+        path: "{{ uptime_kuma_sync_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure Uptime Kuma sync virtualenv exists
+      ansible.builtin.command:
+        cmd: python3 -m venv {{ uptime_kuma_sync_venv_dir }}
+        creates: "{{ uptime_kuma_sync_venv_dir }}/bin/python"
+
+    - name: Install Uptime Kuma sync dependencies
+      ansible.builtin.pip:
+        name:
+          - "uptime-kuma-api==1.2.1"
+        virtualenv: "{{ uptime_kuma_sync_venv_dir }}"
+
+    - name: Install Uptime Kuma public status sync script
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../roles/uptime-kuma/files/sync_public_status.py"
+        dest: "{{ uptime_kuma_sync_dir }}/sync_public_status.py"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Sync configured public monitors into the public status page
+      no_log: true
+      ansible.builtin.command:
+        cmd: "{{ uptime_kuma_sync_venv_dir }}/bin/python {{ uptime_kuma_sync_dir }}/sync_public_status.py"
+      environment:
+        KUMA_BASE_URL: "{{ _uptime_kuma_api_url }}"
+        KUMA_USERNAME: "{{ _uptime_kuma_sync_username }}"
+        KUMA_PASSWORD: "{{ _uptime_kuma_sync_password }}"
+        KUMA_STATUS_PAGE_SLUG: "{{ _uptime_kuma_public_status_slug }}"
+        KUMA_STATUS_PAGE_TITLE: "{{ _uptime_kuma_public_status_title }}"
+        KUMA_PUBLIC_GROUP_NAME: "{{ _uptime_kuma_public_group_name }}"
+        KUMA_MONITORS_JSON: "{{ _uptime_kuma_public_monitors | to_json }}"
+      register: _kuma_sync
+
+    - name: Show sync result
+      ansible.builtin.debug:
+        msg: "Uptime Kuma public status sync completed."

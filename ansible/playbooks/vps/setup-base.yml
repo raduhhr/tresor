@@ -6,7 +6,7 @@
   gather_facts: true
 
   vars:
-    timezone: "UTC"
+    timezone: "Europe/Bucharest"
     enable_fail2ban: true
     ssh_port: 22
     ufw_tcp_allow: [22]        # SSH

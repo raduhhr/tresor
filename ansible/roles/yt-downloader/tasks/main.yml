@@ -1,0 +1,197 @@
+---
+- name: End host if BatchYT liked automation is disabled
+  ansible.builtin.meta: end_host
+  when: not batchyt_liked_enabled | bool
+
+- name: Assert required BatchYT liked settings
+  ansible.builtin.assert:
+    that:
+      - batchyt_controller_source_dir | length > 0
+      - batchyt_root_dir | length > 0
+      - batchyt_run_user | length > 0
+      - batchyt_run_group | length > 0
+      - batchyt_outdir | length > 0
+      - batchyt_playlist_dir_name | length > 0
+      - batchyt_playlist_limit | int > 0
+    fail_msg: "BatchYT liked automation vars are incomplete."
+
+- name: Ensure runtime packages are installed
+  ansible.builtin.apt:
+    name:
+      - curl
+      - ffmpeg
+      - nodejs
+      - python3-pip
+      - python3-venv
+      - unzip
+    state: present
+    update_cache: true
+
+- name: Install Deno runtime for yt-dlp JS challenges
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export DENO_INSTALL={{ batchyt_deno_install_dir | quote }}
+    curl -fsSL https://deno.land/install.sh | sh -s -- -y
+  args:
+    executable: /bin/bash
+    creates: "{{ batchyt_deno_install_dir }}/bin/deno"
+  when: batchyt_install_deno | bool
+
+- name: Link Deno into PATH
+  ansible.builtin.file:
+    src: "{{ batchyt_deno_install_dir }}/bin/deno"
+    dest: "{{ batchyt_deno_bin_path }}"
+    state: link
+    owner: root
+    group: root
+  when: batchyt_install_deno | bool
+
+- name: Ensure BatchYT directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ batchyt_root_dir }}", owner: "root", group: "{{ batchyt_run_group }}", mode: "0755" }
+    - { path: "{{ batchyt_app_dir }}", owner: "root", group: "root", mode: "0755" }
+    - { path: "{{ batchyt_state_dir }}", owner: "{{ batchyt_run_user }}", group: "{{ batchyt_run_group }}", mode: "0750" }
+    - { path: "{{ batchyt_log_dir }}", owner: "{{ batchyt_run_user }}", group: "{{ batchyt_run_group }}", mode: "0750" }
+    - { path: "{{ batchyt_secret_dir }}", owner: "root", group: "{{ batchyt_run_group }}", mode: "0750" }
+    - { path: "{{ batchyt_outdir }}", owner: "{{ batchyt_run_user }}", group: "{{ batchyt_run_group }}", mode: "0750" }
+    - { path: "{{ batchyt_outdir }}/{{ batchyt_playlist_dir_name }}", owner: "{{ batchyt_run_user }}", group: "{{ batchyt_run_group }}", mode: "0750" }
+
+- name: Check controller BatchYT source files
+  ansible.builtin.stat:
+    path: "{{ batchyt_controller_source_dir }}/{{ item }}"
+  loop: "{{ batchyt_app_files }}"
+  register: _batchyt_controller_sources
+  delegate_to: localhost
+  become: false
+
+- name: Fail if BatchYT source mount is missing files
+  ansible.builtin.assert:
+    that:
+      - (_batchyt_controller_sources.results | selectattr('stat.exists', 'equalto', false) | list | length) == 0
+    fail_msg: >-
+      Missing BatchYT source files under {{ batchyt_controller_source_dir }}.
+      Recreate the Ansible container after the new /batchyt-source mount exists.
+
+- name: Install BatchYT app files
+  ansible.builtin.copy:
+    src: "{{ batchyt_controller_source_dir }}/{{ item }}"
+    dest: "{{ batchyt_app_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ batchyt_app_files }}"
+  notify: Restart batchyt liked timer
+
+- name: Ensure venv exists
+  ansible.builtin.command:
+    cmd: "python3 -m venv {{ batchyt_venv_dir }}"
+    creates: "{{ batchyt_venv_dir }}/bin/python"
+
+- name: Install BatchYT Python requirements
+  ansible.builtin.pip:
+    requirements: "{{ batchyt_app_dir }}/requirements-server.txt"
+    virtualenv: "{{ batchyt_venv_dir }}"
+
+- name: Install YouTube cookies from vault when provided
+  ansible.builtin.copy:
+    content: "{{ batchyt_youtube_cookies_content }}"
+    dest: "{{ batchyt_cookies_path }}"
+    owner: "{{ batchyt_run_user }}"
+    group: "{{ batchyt_run_group }}"
+    mode: "0600"
+  no_log: true
+  when: batchyt_youtube_cookies_content | length > 0
+
+- name: Check controller YouTube cookies source when configured
+  ansible.builtin.stat:
+    path: "{{ batchyt_youtube_cookies_src }}"
+  register: _batchyt_controller_cookies
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when:
+    - batchyt_youtube_cookies_content | length == 0
+    - batchyt_youtube_cookies_src | length > 0
+
+- name: Install YouTube cookies from controller source when provided
+  ansible.builtin.copy:
+    src: "{{ batchyt_youtube_cookies_src }}"
+    dest: "{{ batchyt_cookies_path }}"
+    owner: "{{ batchyt_run_user }}"
+    group: "{{ batchyt_run_group }}"
+    mode: "0600"
+    force: false
+  no_log: true
+  when:
+    - batchyt_youtube_cookies_content | length == 0
+    - batchyt_youtube_cookies_src | length > 0
+    - _batchyt_controller_cookies.stat.exists | default(false)
+
+- name: Check YouTube cookies file
+  ansible.builtin.stat:
+    path: "{{ batchyt_cookies_path }}"
+  register: _batchyt_cookies
+
+- name: Require YouTube cookies file for liked videos
+  ansible.builtin.assert:
+    that:
+      - _batchyt_cookies.stat.exists
+      - _batchyt_cookies.stat.size | int > 0
+    fail_msg: >-
+      BatchYT liked automation needs a Netscape YouTube cookies file at
+      {{ batchyt_cookies_path }} or vault_batchyt_youtube_cookies_txt in prod vault.
+  when: batchyt_require_cookies_file | bool
+
+- name: Render BatchYT environment
+  ansible.builtin.template:
+    src: batchyt-liked.env.j2
+    dest: /etc/batchyt-liked.env
+    owner: root
+    group: "{{ batchyt_run_group }}"
+    mode: "0640"
+  no_log: true
+  notify: Restart batchyt liked timer
+
+- name: Install BatchYT wrapper
+  ansible.builtin.template:
+    src: batchyt-liked-run.sh.j2
+    dest: "{{ batchyt_root_dir }}/batchyt-liked-run.sh"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart batchyt liked timer
+
+- name: Install systemd service
+  ansible.builtin.template:
+    src: batchyt-liked.service.j2
+    dest: /etc/systemd/system/batchyt-liked.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart batchyt liked timer
+
+- name: Install systemd timer
+  ansible.builtin.template:
+    src: batchyt-liked.timer.j2
+    dest: /etc/systemd/system/batchyt-liked.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart batchyt liked timer
+
+- name: Enable BatchYT liked timer
+  ansible.builtin.systemd:
+    name: batchyt-liked.timer
+    enabled: true
+    state: started
+    daemon_reload: true

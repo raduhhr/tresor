@@ -7,16 +7,32 @@ cadvisor_image: ""
 prometheus_container_name: "prometheus"
 prometheus_config_dir: "/mnt/ssd/configs/prometheus"
 prometheus_network: "internal_net"
+prometheus_internal_dns_name: "prometheus-internal"
 
 # Container port
 prometheus_port: 9090
 
-# NEW: LAN exposure toggle + host bind port
-prometheus_expose_host_port: true
+# LAN exposure toggle + host bind port. Grafana uses the internal Docker network,
+# so production can keep this off to avoid boot races with host IP binding.
+prometheus_expose_host_port: false
 prometheus_host_port: 9090
-prometheus_bind_addr: "192.168.1.100"
+prometheus_bind_addr: "192.0.2.10"
 
-prometheus_scrape_interval: "15s"
+prometheus_scrape_interval: "5s"
+prometheus_retention_time: "10y"
+prometheus_textfile_dir: "{{ prometheus_config_dir }}/textfile"
+
+prometheus_minecraft_metrics_enabled: true
+prometheus_minecraft_metrics_app_dir: "/opt/prometheus-exporters"
+prometheus_minecraft_metrics_script_path: "{{ prometheus_minecraft_metrics_app_dir }}/minecraft_status_textfile.py"
+prometheus_minecraft_metrics_python_bin: "/usr/bin/python3"
+prometheus_minecraft_metrics_service_name: "prometheus-minecraft-metrics"
+prometheus_minecraft_metrics_host: "{{ wg_bind_ip | default('10.66.66.2') }}"
+prometheus_minecraft_metrics_port: 25565
+prometheus_minecraft_metrics_server_label: "tresor_mc"
+prometheus_minecraft_metrics_timeout_seconds: 3
+prometheus_minecraft_metrics_interval_seconds: 30
+prometheus_minecraft_metrics_output_file: "{{ prometheus_textfile_dir }}/minecraft.prom"
 
 prometheus_targets:
   - job_name: "prometheus"
@@ -31,6 +47,7 @@ prometheus_targets:
     static_configs:
       - targets: ["cadvisor:8080"]
 
-  - job_name: "minecraft"
+  - job_name: "tresor-index-api"
+    metrics_path: "/metrics"
     static_configs:
-      - targets: ["{{ prometheus_minecraft_target | default('10.66.66.2:9225') }}"]
+      - targets: ["tresor-index-api:8000"]

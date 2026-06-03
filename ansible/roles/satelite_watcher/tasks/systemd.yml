@@ -1,0 +1,65 @@
+---
+- name: Stop legacy scheduler timer after rename
+  ansible.builtin.systemd:
+    name: meteor-schedule.timer
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Stop legacy scheduler service after rename
+  ansible.builtin.systemd:
+    name: meteor-schedule.service
+    state: stopped
+  failed_when: false
+
+- name: Remove legacy systemd units after rename
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/meteor-schedule.service
+    - /etc/systemd/system/meteor-schedule.timer
+    - /etc/systemd/system/meteor-record@.service
+  notify:
+    - systemd daemon reload
+
+- name: Install Satelite watcher service
+  ansible.builtin.template:
+    src: satelite-watcher-schedule.service.j2
+    dest: "/etc/systemd/system/{{ satelite_watcher_scheduler_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - systemd daemon reload
+    - restart satelite watcher scheduler timer
+
+- name: Install Satelite watcher timer
+  ansible.builtin.template:
+    src: satelite-watcher-schedule.timer.j2
+    dest: "/etc/systemd/system/{{ satelite_watcher_scheduler_service_name }}.timer"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - systemd daemon reload
+    - restart satelite watcher scheduler timer
+
+- name: Install Satelite Watcher record service template
+  ansible.builtin.template:
+    src: satelite-watcher-record@.service.j2
+    dest: "/etc/systemd/system/{{ satelite_watcher_record_service_name }}@.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - systemd daemon reload
+
+- name: Flush systemd handlers before enabling timer
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable Satelite watcher timer
+  ansible.builtin.systemd:
+    name: "{{ satelite_watcher_scheduler_service_name }}.timer"
+    enabled: true
+    state: started

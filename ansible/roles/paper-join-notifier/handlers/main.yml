@@ -1,0 +1,11 @@
+---
+- name: daemon-reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart paper-join-notifier
+  ansible.builtin.systemd:
+    name: "{{ paper_join_notifier_service_name }}"
+    state: restarted
+    daemon_reload: true
+  when: paper_join_notifier_enabled | bool

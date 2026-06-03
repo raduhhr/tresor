@@ -1,0 +1,10 @@
+---
+- name: Remove Tresor Index containers
+  hosts: tresor
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Remove Tresor Index containers
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: remove

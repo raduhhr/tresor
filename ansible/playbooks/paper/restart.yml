@@ -1,4 +1,8 @@
-# playbooks/paper/restart.yml
+---
+# Reconcile Paper first so restart cannot revive an old/stale Docker definition
+# with the wrong env, network mode, or data mount.
+- import_playbook: deploy.yml
+
 - name: Restart Paper container
   hosts: tresor
   gather_facts: false
@@ -7,6 +11,8 @@
     paper_container: paper
     paper_wg_ip: "{{ hostvars[inventory_hostname].wg_ip | default(hostvars[inventory_hostname].wg_bind_ip | default('10.66.66.2')) }}"
     paper_port: 25565
+    paper_local_probe_timeout: 180
+    paper_vps_probe_timeout: 45
     logs_tail: 100
   tasks:
     - name: Check Paper container exists
@@ -14,21 +20,41 @@
         name: "{{ paper_container }}"
       register: paper_info
 
-    - name: Restart Paper
-      community.docker.docker_container:
-        name: "{{ paper_container }}"
-        state: started
-        restart: true
-      when: paper_info.exists
+    - name: Fail when Paper container does not exist after deploy
+      ansible.builtin.fail:
+        msg: "Paper container {{ paper_container }} does not exist after deploy reconciliation."
+      when: not paper_info.exists
 
-    # Probe from VPS (allowed by your firewall)
+    - name: Restart Paper with existing reconciled Docker definition
+      ansible.builtin.command: "docker restart {{ paper_container }}"
+      register: _paper_restart
+      changed_when: _paper_restart.rc == 0
+
+    - name: Wait for Paper local WG socket
+      ansible.builtin.wait_for:
+        host: "{{ paper_wg_ip }}"
+        port: "{{ paper_port }}"
+        timeout: "{{ paper_local_probe_timeout }}"
+
+    # Probe from VPS (allowed by your firewall). This is a routing/firewall
+    # smoke test, not a reason to abort the full restart-all recovery flow.
     - name: Wait for Paper via WireGuard from VPS
       ansible.builtin.wait_for:
         host: "{{ paper_wg_ip }}"
         port: "{{ paper_port }}"
-        timeout: 90
+        timeout: "{{ paper_vps_probe_timeout }}"
       delegate_to: tresor-vps
       run_once: true
+      register: _paper_vps_probe
+      failed_when: false
+
+    - name: Warn when Paper VPS probe fails
+      ansible.builtin.debug:
+        msg: >-
+          Paper restarted locally, but the VPS probe could not confirm
+          {{ paper_wg_ip }}:{{ paper_port }} within {{ paper_vps_probe_timeout }}s.
+          Check WireGuard/Velocity path separately if players cannot connect.
+      when: (_paper_vps_probe.state | default('')) != 'started'
 
     - name: Tail recent logs
       ansible.builtin.shell: "docker logs --tail {{ logs_tail }} {{ paper_container }}"

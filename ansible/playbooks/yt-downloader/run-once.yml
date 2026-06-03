@@ -1,0 +1,9 @@
+---
+- name: Run BatchYT liked videos automation once
+  hosts: prod
+  become: true
+  tasks:
+    - name: Run BatchYT liked service once
+      ansible.builtin.systemd:
+        name: batchyt-liked.service
+        state: started

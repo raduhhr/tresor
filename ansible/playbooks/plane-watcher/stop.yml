@@ -1,0 +1,12 @@
+---
+- name: Stop Plane Watcher
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop Plane Watcher container
+      community.docker.docker_container:
+        name: plane-watcher
+        state: stopped
+      failed_when: false

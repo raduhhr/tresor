@@ -1,0 +1,11 @@
+---
+- name: Setup nginx reverse proxy for vot-parlament.ro
+  hosts: vps
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Apply vot-parlament.ro nginx vhost
+      ansible.builtin.include_role:
+        name: nginx-music
+        tasks_from: vot

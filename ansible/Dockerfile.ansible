@@ -1,0 +1,36 @@
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    SSH_AUTH_SOCK=/root/.ssh/agent.sock \
+    TRESOR_ANSIBLE_RUNTIME_DIR=/root/.tresor-ansible \
+    ANSIBLE_CONFIG=/root/.tresor-ansible/ansible.cfg
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        git \
+        openssh-client \
+        rsync \
+        util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+        ansible-core \
+        paramiko \
+        pyyaml \
+        questionary \
+        rich
+
+COPY ansible/requirements.yml /tmp/tresor-requirements.yml
+RUN ansible-galaxy collection install -r /tmp/tresor-requirements.yml
+
+COPY ansible/docker-entrypoint.sh /usr/local/bin/tresor-entrypoint
+RUN chmod +x /usr/local/bin/tresor-entrypoint
+
+WORKDIR /workspace/ansible
+
+ENTRYPOINT ["tresor-entrypoint"]
+CMD ["bash"]

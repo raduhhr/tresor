@@ -111,6 +111,15 @@ def normalize_steam_url(url):
     return m.group(1) if m else url
 
 
+def clean_image_url(url):
+    if not url:
+        return None
+    url = str(url).strip()
+    if not url.startswith(("http://", "https://")):
+        return None
+    return url.replace(" ", "%20")
+
+
 # =====================================================================
 #  STEAM — search API for -100% discounted games + appdetails validation
 # =====================================================================
@@ -193,7 +202,18 @@ def fetch_steam():
                     continue
 
                 norm = normalize_steam_url(link)
-                games.append({"name": title, "store": norm, "platform": "Steam"})
+                image = None
+                img_el = row.select_one("img")
+                if img_el:
+                    image = clean_image_url(img_el.get("src") or img_el.get("data-src"))
+                if not image:
+                    image = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
+                games.append({
+                    "name": title,
+                    "store": norm,
+                    "platform": "Steam",
+                    "image": image,
+                })
                 time.sleep(0.3)
 
             time.sleep(0.5)
@@ -246,6 +266,9 @@ def fetch_epic():
                 until = _epic_free_until(g)
 
                 item = {"name": title, "store": link, "platform": "Epic Games"}
+                image = _epic_image(g)
+                if image:
+                    item["image"] = image
                 if until:
                     item["free_until"] = until
                 games.append(item)
@@ -315,6 +338,31 @@ def _epic_build_link(game):
     return f"https://store.epicgames.com/p/{slug}" if slug else "https://store.epicgames.com/en-US/free-games"
 
 
+def _epic_image(game):
+    preferred = (
+        "OfferImageWide",
+        "DieselStoreFrontWide",
+        "VaultClosed",
+        "DieselGameBox",
+        "Thumbnail",
+    )
+    images = game.get("keyImages") or []
+    by_type = {
+        (img.get("type") or ""): clean_image_url(img.get("url"))
+        for img in images
+        if isinstance(img, dict)
+    }
+    for key in preferred:
+        if by_type.get(key):
+            return by_type[key]
+    for img in images:
+        if isinstance(img, dict):
+            url = clean_image_url(img.get("url"))
+            if url:
+                return url
+    return None
+
+
 # =====================================================================
 #  GAMERPOWER — aggregator API (catches stuff the direct scrapers miss)
 # =====================================================================
@@ -357,12 +405,22 @@ def fetch_gamerpower():
                 # Try to extract a direct Steam store link
                 store_url = _gamerpower_find_steam_link(item)
                 if store_url:
-                    games.append({"name": title, "store": store_url, "platform": "Steam"})
+                    games.append({
+                        "name": title,
+                        "store": store_url,
+                        "platform": "Steam",
+                        "image": _gamerpower_image(item),
+                    })
 
             elif "epic" in platforms:
                 store_url = _gamerpower_find_epic_link(item)
                 if store_url:
-                    games.append({"name": title, "store": store_url, "platform": "Epic Games"})
+                    games.append({
+                        "name": title,
+                        "store": store_url,
+                        "platform": "Epic Games",
+                        "image": _gamerpower_image(item),
+                    })
 
     except Exception as e:
         print(f"[GamerPower] Failed: {e}")
@@ -393,6 +451,10 @@ def _gamerpower_find_epic_link(item):
         if m:
             return m.group(0).rstrip(".,;)")
     return item.get("open_giveaway_url") or None
+
+
+def _gamerpower_image(item):
+    return clean_image_url(item.get("image") or item.get("thumbnail"))
 
 
 # =====================================================================
@@ -439,6 +501,9 @@ PLATFORM_CONFIG = {
 
 
 def get_game_image(game):
+    image = clean_image_url(game.get("image"))
+    if image:
+        return image
     if game.get("platform") == "Steam":
         m = re.search(r"/app/(\d+)", game.get("store", ""))
         if m:

@@ -1,0 +1,28 @@
+---
+paper_join_notifier_enabled: true
+
+paper_join_notifier_app_dir: "/opt/paper-join-notifier"
+paper_join_notifier_config_dir: "/mnt/ssd/configs/paper-join-notifier"
+paper_join_notifier_env_file: "{{ paper_join_notifier_config_dir }}/paper-join-notifier.env"
+paper_join_notifier_script_path: "{{ paper_join_notifier_app_dir }}/paper_join_notifier.py"
+paper_join_notifier_service_name: "paper-join-notifier"
+
+paper_join_notifier_python_bin: "/usr/bin/python3"
+paper_join_notifier_run_user: "ansible"
+paper_join_notifier_run_group: "ansible"
+
+paper_join_notifier_manage_packages: true
+paper_join_notifier_python_packages:
+  - python3
+
+paper_join_notifier_log_file: "{{ paper_data_dir }}/logs/latest.log"
+paper_join_notifier_server_name: "Tresor Minecraft Server"
+paper_join_notifier_discord_webhook_url: ""
+paper_join_notifier_request_timeout_seconds: 10
+paper_join_notifier_poll_interval_seconds: 1.0
+paper_join_notifier_start_at_end: true
+paper_join_notifier_debug: false
+
+paper_join_notifier_discord_username: "Tresor MC Server"
+paper_join_notifier_discord_avatar_url: ""
+paper_join_notifier_embed_color: 5763719

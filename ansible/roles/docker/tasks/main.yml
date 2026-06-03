@@ -163,6 +163,32 @@
     mode: "0755"
   tags: [docker, docker:config]
 
+- name: Ensure docker systemd drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [docker, docker:config]
+
+- name: Drop docker systemd override to wait for network-online
+  ansible.builtin.template:
+    src: docker.service.override.conf.j2
+    dest: /etc/systemd/system/docker.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: _docker_systemd_override
+  notify: Restart docker
+  tags: [docker, docker:config]
+
+- name: Reload systemd when docker override changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: _docker_systemd_override is changed
+  tags: [docker, docker:config]
+
 - name: Drop /etc/docker/daemon.json
   ansible.builtin.template:
     src: daemon.json.j2
@@ -217,4 +243,3 @@
   failed_when: false
   loop: "{{ docker_group_drop_users | default([]) }}"
   tags: [docker, docker:security]
-

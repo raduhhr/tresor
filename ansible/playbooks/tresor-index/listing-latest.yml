@@ -1,0 +1,11 @@
+---
+- name: Show latest Tresor Index listings
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Show latest Tresor Index listings
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: listing-latest

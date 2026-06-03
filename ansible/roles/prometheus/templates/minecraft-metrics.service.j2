@@ -1,0 +1,16 @@
+[Unit]
+Description=Write Tresor Minecraft Prometheus textfile metrics
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart={{ prometheus_minecraft_metrics_python_bin }} {{ prometheus_minecraft_metrics_script_path }} --host {{ prometheus_minecraft_metrics_host }} --port {{ prometheus_minecraft_metrics_port }} --server-label {{ prometheus_minecraft_metrics_server_label }} --timeout {{ prometheus_minecraft_metrics_timeout_seconds }} --output {{ prometheus_minecraft_metrics_output_file }}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ prometheus_textfile_dir }}

@@ -1,0 +1,22 @@
+[Unit]
+Description=vot-FE Astro SSR frontend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ vot_fe_runtime_user }}
+Group={{ vot_fe_runtime_group }}
+WorkingDirectory={{ vot_fe_current_path }}
+EnvironmentFile={{ vot_fe_env_path }}
+ExecStart={{ vot_fe_node_bin }} dist/server/entry.mjs
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths={{ vot_fe_root }}
+
+[Install]
+WantedBy=multi-user.target

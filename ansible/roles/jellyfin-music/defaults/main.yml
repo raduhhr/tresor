@@ -1,8 +1,8 @@
-###############################
+﻿###############################
 # File: ./defaults/main.yml
 ###############################
 ---
-# Jellyfin Music (public via VPS reverse-proxy over WireGuard)
+# Jellyfin Media (public via VPS reverse-proxy over WireGuard)
 # This instance is meant to be reached ONLY from the VPS over WG.
 # Clients hit VPS -> VPS proxies -> WG -> this Jellyfin.
 
@@ -13,7 +13,7 @@ jellyfin_music_container_name: "jellyfin-music"
 
 # Docker network to attach to (doesn't matter much since we publish a host port,
 # but keeping it consistent with your internal service patterns)
-jellyfin_music_network: "internal_net"
+jellyfin_music_network: "public_net"
 
 # Jellyfin internal port (inside container)
 jellyfin_music_container_port: 8096
@@ -27,10 +27,10 @@ jellyfin_music_listen_port: 18096
 # Data paths (host)
 # Config stays on SSD.
 jellyfin_music_config_dir: "/mnt/ssd/configs/jellyfin-music"
+jellyfin_music_cache_dir: "{{ jellyfin_music_config_dir }}/cache"
 
-# Your actual music location:
-
-# (If standardize to /mnt/data/media/music or similar, change this var.)
+# Your primary media library location.
+# If you later standardize paths, update these vars to match.
 # Media directories
 jellyfin_music_media_dir: /mnt/data/files/Music
 jellyfin_music_movies_dir: /mnt/data/files/Movies
@@ -46,6 +46,9 @@ jellyfin_music_uid: 1000
 # Optional: VAAPI (no transcoding, so default false)
 jellyfin_music_enable_vaapi: false
 jellyfin_music_vaapi_device: "/dev/dri/renderD128"
+
+# Keep Jellyfin from scanning and applying LUFS/audio-normalization data to music.
+jellyfin_music_enable_lufs_scan: false
 
 # Extra env if you want
 jellyfin_music_env: {}

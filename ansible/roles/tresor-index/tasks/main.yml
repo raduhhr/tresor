@@ -1,0 +1,263 @@
+---
+- name: End host if Tresor Index is disabled
+  ansible.builtin.meta: end_host
+  when: not tresor_index_enabled | bool
+
+- name: Ensure Tresor Index Docker network exists
+  community.docker.docker_network:
+    name: "{{ tresor_index_network }}"
+    state: present
+
+- name: Ensure Tresor Index directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { path: "{{ tresor_index_app_dir }}", mode: "0755" }
+    - { path: "{{ tresor_index_config_dir }}", mode: "0750" }
+    - { path: "{{ tresor_index_db_data_dir }}", mode: "0700", owner: "{{ tresor_index_postgres_uid }}", group: "{{ tresor_index_postgres_gid }}" }
+
+- name: Install Tresor Index app build context
+  ansible.builtin.copy:
+    src: app/
+    dest: "{{ tresor_index_app_dir }}/"
+    owner: root
+    group: root
+    mode: preserve
+  register: _tresor_index_app_copy
+
+- name: Render Tresor Index sources registry
+  ansible.builtin.template:
+    src: sources.yml.j2
+    dest: "{{ tresor_index_sources_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: _tresor_index_sources
+
+- name: Render Tresor Index environment
+  ansible.builtin.template:
+    src: tresor-index.env.j2
+    dest: "{{ tresor_index_env_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+  no_log: true
+  register: _tresor_index_env
+
+- name: Build Tresor Index app image
+  community.docker.docker_image:
+    name: "{{ tresor_index_app_image }}"
+    source: build
+    force_source: "{{ tresor_index_force_rebuild | bool }}"
+    build:
+      path: "{{ tresor_index_app_dir }}"
+
+- name: Run Tresor Index Postgres container
+  community.docker.docker_container:
+    name: "{{ tresor_index_db_container_name }}"
+    image: "{{ tresor_index_postgres_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ tresor_index_network }}"
+    env:
+      POSTGRES_DB: "{{ tresor_index_db_name }}"
+      POSTGRES_USER: "{{ tresor_index_db_user }}"
+      POSTGRES_PASSWORD: "{{ tresor_index_db_password }}"
+      TZ: "{{ base_timezone | default('Europe/Bucharest') }}"
+    volumes:
+      - "{{ tresor_index_db_data_dir }}:/var/lib/postgresql/data"
+    state: started
+  no_log: true
+
+- name: Wait for Tresor Index database to accept connections
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ tresor_index_db_container_name }}"
+      - pg_isready
+      - "-U"
+      - "{{ tresor_index_db_user }}"
+      - "-d"
+      - "{{ tresor_index_db_name }}"
+  register: _tresor_index_pg_ready
+  retries: 20
+  delay: 2
+  until: _tresor_index_pg_ready.rc == 0
+  changed_when: false
+
+- name: Ensure Tresor Index database user password matches Ansible state
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ tresor_index_db_container_name }}"
+      - psql
+      - "-U"
+      - "{{ tresor_index_db_user }}"
+      - "-d"
+      - "{{ tresor_index_db_name }}"
+      - "-c"
+      - "ALTER USER {{ tresor_index_db_user }} WITH PASSWORD '{{ tresor_index_db_password | replace(\"'\", \"''\") }}';"
+  no_log: true
+  changed_when: false
+
+- name: Apply Tresor Index database migrations
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ tresor_index_network }}"
+      - --env-file
+      - "{{ tresor_index_env_file }}"
+      - -v
+      - "{{ tresor_index_config_dir }}:/config:ro"
+      - "{{ tresor_index_app_image }}"
+      - python
+      - -m
+      - tresor_index.cli
+      - migrate
+  register: _tresor_index_migrate
+  changed_when: "'migrations applied' in _tresor_index_migrate.stdout"
+
+- name: Ensure Tresor Index Grafana read-only database user exists
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ tresor_index_db_container_name }}"
+      - psql
+      - "-U"
+      - "{{ tresor_index_db_user }}"
+      - "-d"
+      - "{{ tresor_index_db_name }}"
+      - "-c"
+      - |
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{{ tresor_index_grafana_db_user }}') THEN
+            CREATE ROLE "{{ tresor_index_grafana_db_user }}" LOGIN PASSWORD '{{ tresor_index_grafana_db_password | replace("'", "''") }}';
+          ELSE
+            ALTER ROLE "{{ tresor_index_grafana_db_user }}" WITH LOGIN PASSWORD '{{ tresor_index_grafana_db_password | replace("'", "''") }}';
+          END IF;
+        END
+        $$;
+        GRANT CONNECT ON DATABASE {{ tresor_index_db_name }} TO "{{ tresor_index_grafana_db_user }}";
+        GRANT USAGE ON SCHEMA public TO "{{ tresor_index_grafana_db_user }}";
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{{ tresor_index_grafana_db_user }}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "{{ tresor_index_grafana_db_user }}";
+  no_log: true
+  changed_when: false
+
+- name: Ensure Tresor Index public API read-only database user exists
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ tresor_index_db_container_name }}"
+      - psql
+      - "-U"
+      - "{{ tresor_index_db_user }}"
+      - "-d"
+      - "{{ tresor_index_db_name }}"
+      - "-c"
+      - |
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{{ tresor_index_public_api_db_user }}') THEN
+            CREATE ROLE "{{ tresor_index_public_api_db_user }}" LOGIN PASSWORD '{{ tresor_index_public_api_db_password | replace("'", "''") }}';
+          ELSE
+            ALTER ROLE "{{ tresor_index_public_api_db_user }}" WITH LOGIN PASSWORD '{{ tresor_index_public_api_db_password | replace("'", "''") }}';
+          END IF;
+        END
+        $$;
+        GRANT CONNECT ON DATABASE {{ tresor_index_db_name }} TO "{{ tresor_index_public_api_db_user }}";
+        GRANT USAGE ON SCHEMA public TO "{{ tresor_index_public_api_db_user }}";
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{{ tresor_index_public_api_db_user }}";
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "{{ tresor_index_public_api_db_user }}";
+  no_log: true
+  changed_when: false
+  when: tresor_index_api_enabled | bool
+
+- name: Sync Tresor Index source registry into database
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ tresor_index_network }}"
+      - --env-file
+      - "{{ tresor_index_env_file }}"
+      - -v
+      - "{{ tresor_index_config_dir }}:/config:ro"
+      - "{{ tresor_index_app_image }}"
+      - python
+      - -m
+      - tresor_index.cli
+      - source
+      - sync
+  register: _tresor_index_source_sync
+  changed_when: false
+
+- name: Run Tresor Index scheduler container
+  community.docker.docker_container:
+    name: "{{ tresor_index_scheduler_container_name }}"
+    image: "{{ tresor_index_app_image }}"
+    restart_policy: unless-stopped
+    comparisons:
+      networks: strict
+    networks: "{{ tresor_index_scheduler_networks | map('regex_replace', '^(.*)$', '{\"name\": \"\\1\"}') | map('from_yaml') | list }}"
+    env_file: "{{ tresor_index_env_file }}"
+    volumes:
+      - "{{ tresor_index_config_dir }}:/config:ro"
+    command:
+      - python
+      - -m
+      - tresor_index.cli
+      - scheduler
+    state: started
+
+- name: Run Tresor Index public API container
+  community.docker.docker_container:
+    name: "{{ tresor_index_api_container_name }}"
+    image: "{{ tresor_index_app_image }}"
+    restart_policy: unless-stopped
+    recreate: true
+    comparisons:
+      networks: strict
+    networks: "{{ tresor_index_api_networks | map('regex_replace', '^(.*)$', '{\"name\": \"\\1\"}') | map('from_yaml') | list }}"
+    env_file: "{{ tresor_index_env_file }}"
+    volumes:
+      - "{{ tresor_index_config_dir }}:/config:ro"
+    ports:
+      - "{{ tresor_index_api_bind_addr }}:{{ tresor_index_api_host_port }}:{{ tresor_index_api_container_port }}"
+    command:
+      - uvicorn
+      - tresor_index.api:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "{{ tresor_index_api_container_port | string }}"
+    state: started
+  when: tresor_index_api_enabled | bool
+
+- name: Show Tresor Index deployment summary
+  ansible.builtin.debug:
+    msg:
+      service: tresor-index
+      app_image: "{{ tresor_index_app_image }}"
+      db_container: "{{ tresor_index_db_container_name }}"
+      scheduler_container: "{{ tresor_index_scheduler_container_name }}"
+      api_container: "{{ tresor_index_api_container_name if tresor_index_api_enabled | bool else 'disabled' }}"
+      api_url: "{{ 'http://' ~ tresor_index_api_bind_addr ~ ':' ~ (tresor_index_api_host_port | string) if tresor_index_api_enabled | bool else 'disabled' }}"
+      network: "{{ tresor_index_network }}"
+      configured_sources: "{{ tresor_index_sources | length }}"
+      source_sync: "{{ _tresor_index_source_sync.stdout | default('') }}"

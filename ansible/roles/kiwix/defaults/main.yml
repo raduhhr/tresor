@@ -14,7 +14,7 @@ kiwix_gid: 1000
 kiwix_container_name: "kiwix"
 
 # LAN exposure (avoid your 8080/Filebrowser)
-kiwix_bind_addr: "192.168.1.100"
+kiwix_bind_addr: "192.0.2.10"
 kiwix_host_port: 8181
 kiwix_container_port: 8080
 

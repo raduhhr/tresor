@@ -34,6 +34,10 @@ ansible_dump_*.txt
 tresor_dump_*.txt
 # Optional local inventory you might keep next to hosts.ini
 inventory/hosts.local.ini
+ansible/inventory/
+ansible/vaults/
+ansible/exports/
+docu/
 
 # --- Secrets / keys (NEVER commit these) ---
 # (Your vault password is outside the repo, keep it that way.)

@@ -1,0 +1,171 @@
+---
+- name: Check SatDump binary before install
+  ansible.builtin.stat:
+    path: "{{ satelite_watcher_satdump_bin }}"
+  register: satelite_watcher_satdump_stat_before
+
+- name: Install SatDump build dependencies
+  ansible.builtin.apt:
+    name: "{{ satelite_watcher_satdump_build_packages }}"
+    state: present
+    update_cache: yes
+  when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+- name: Install available VOLK development package
+  block:
+    - name: Try preferred VOLK package names
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ satelite_watcher_satdump_volk_packages }}"
+      register: satelite_watcher_volk_install_attempts
+      ignore_errors: true
+      when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+    - name: Assert one VOLK package installed successfully
+      ansible.builtin.assert:
+        that:
+          - >
+            (
+              satelite_watcher_volk_install_attempts.results
+              | rejectattr('failed', 'defined')
+              | list
+              | length
+            ) + (
+              satelite_watcher_volk_install_attempts.results
+              | selectattr('failed', 'defined')
+              | selectattr('failed', 'equalto', false)
+              | list
+              | length
+            ) > 0
+        fail_msg: >-
+          Could not install any supported VOLK development package.
+          Tried: {{ satelite_watcher_satdump_volk_packages | join(', ') }}
+      when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+- name: Ensure output directory structure exists
+  ansible.builtin.file:
+    path: "{{ satelite_watcher_recordings_dir }}"
+    state: directory
+    owner: "{{ satelite_watcher_user }}"
+    group: "{{ satelite_watcher_group }}"
+    mode: "0775"
+
+- name: Ensure SatDump source checkout directory exists
+  ansible.builtin.file:
+    path: "{{ satelite_watcher_satdump_source_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+- name: Checkout SatDump source
+  ansible.builtin.git:
+    repo: "{{ satelite_watcher_satdump_repo }}"
+    dest: "{{ satelite_watcher_satdump_source_dir }}"
+    version: "{{ satelite_watcher_satdump_version }}"
+    force: true
+  register: satelite_watcher_satdump_git
+  when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+- name: Ensure SatDump build directory exists
+  ansible.builtin.file:
+    path: "{{ satelite_watcher_satdump_build_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+- name: Configure SatDump build
+  ansible.builtin.command:
+    cmd: >-
+      cmake
+      -DCMAKE_BUILD_TYPE=Release
+      -DCMAKE_INSTALL_PREFIX={{ satelite_watcher_satdump_install_prefix }}
+      -DBUILD_GUI={{ 'ON' if satelite_watcher_satdump_build_gui | bool else 'OFF' }}
+      ..
+    chdir: "{{ satelite_watcher_satdump_build_dir }}"
+  when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+- name: Build SatDump
+  ansible.builtin.command:
+    cmd: "make -j{{ satelite_watcher_satdump_build_jobs }}"
+    chdir: "{{ satelite_watcher_satdump_build_dir }}"
+  when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+- name: Install SatDump
+  ansible.builtin.command:
+    cmd: make install
+    chdir: "{{ satelite_watcher_satdump_build_dir }}"
+  when: satelite_watcher_satdump_manage_install | bool and not satelite_watcher_satdump_stat_before.stat.exists
+
+- name: Register SatDump library path for dynamic linker
+  ansible.builtin.copy:
+    dest: "{{ satelite_watcher_satdump_ldconfig_conf }}"
+    content: "{{ satelite_watcher_satdump_library_path }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Refresh dynamic linker cache
+  ansible.builtin.command: ldconfig
+  changed_when: false
+
+- name: Install RTL-SDR access udev rule for non-root recording
+  ansible.builtin.copy:
+    dest: "{{ satelite_watcher_rtlsdr_udev_rules_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Allow non-root SDR access for RTL-SDR devices used by satelite-watcher.
+      SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", MODE="0660", GROUP="{{ satelite_watcher_sdr_access_group }}", TAG+="uaccess"
+      SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", MODE="0660", GROUP="{{ satelite_watcher_sdr_access_group }}", TAG+="uaccess"
+
+- name: Reload udev rules
+  ansible.builtin.command: udevadm control --reload-rules
+  changed_when: false
+
+- name: Trigger USB udev rules
+  ansible.builtin.command: udevadm trigger --subsystem-match=usb --action=add
+  changed_when: false
+
+- name: Install Python venv support
+  ansible.builtin.apt:
+    name:
+      - python3-venv
+    state: present
+    update_cache: yes
+
+- name: Check SatDump binary
+  ansible.builtin.stat:
+    path: "{{ satelite_watcher_satdump_bin }}"
+  register: satelite_watcher_satdump_stat
+
+- name: Assert SatDump CLI is present
+  ansible.builtin.assert:
+    that:
+      - satelite_watcher_satdump_stat.stat.exists
+      - satelite_watcher_satdump_stat.stat.executable
+    fail_msg: "SatDump CLI not found or not executable at {{ satelite_watcher_satdump_bin }}."
+
+- name: Create Satelite Watcher virtualenv
+  become_user: "{{ satelite_watcher_user }}"
+  ansible.builtin.command:
+    cmd: "{{ ansible_facts.python.executable }} -m venv {{ satelite_watcher_venv_path }}"
+    creates: "{{ satelite_watcher_python_bin }}"
+
+- name: Install Satelite watcher Python packages
+  become_user: "{{ satelite_watcher_user }}"
+  ansible.builtin.pip:
+    name: "{{ satelite_watcher_python_packages }}"
+    virtualenv: "{{ satelite_watcher_venv_path }}"
+    virtualenv_command: "{{ ansible_facts.python.executable }} -m venv"
+
+- name: Optionally probe SDRs with SatDump
+  ansible.builtin.command:
+    cmd: "{{ satelite_watcher_satdump_bin }} sdr_probe"
+  changed_when: false
+  when: satelite_watcher_validate_sdr_probe | bool

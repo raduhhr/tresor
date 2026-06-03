@@ -1,11 +1,22 @@
 ---
-- name: Backup Jellyfin (stop → snapshot → start)
+- name: Backup Jellyfin (stop -> snapshot -> start)
   hosts: prod
   become: true
 
   vars:
     backup_dir: "/mnt/data/files/Backups/jellyfin"
     container_name: "jellyfin"
+    backup_excludes:
+      - "jellyfin/cache"
+      - "jellyfin/log"
+      - "jellyfin/metadata"
+      - "jellyfin/transcodes"
+      - "jellyfin/migration.xml"
+      - "jellyfin/config/migration.xml"
+      - "jellyfin/data/metadata"
+      - "jellyfin/data/transcodes"
+      - "jellyfin/root/default/metadata"
+      - "jellyfin/root/default/transcodes"
 
   tasks:
     - name: Ensure backup directory exists
@@ -24,7 +35,12 @@
     - name: Create compressed snapshot
       ansible.builtin.shell: |
         DATE=$(date +%d%m%Y-%H%M)
-        tar -czf "{{ backup_dir }}/jellyfin-backup-$DATE.tar.gz" -C /mnt/ssd/configs jellyfin
+        tar \
+        {% for item in backup_excludes %}
+          --exclude='{{ item }}' \
+        {% endfor %}
+          -czf "{{ backup_dir }}/jellyfin-backup-$DATE.tar.gz" \
+          -C /mnt/ssd/configs jellyfin
         echo "{{ backup_dir }}/jellyfin-backup-$DATE.tar.gz"
       register: _snapshot
       changed_when: true
@@ -42,6 +58,6 @@
     - name: Log backup
       ansible.builtin.lineinfile:
         path: /var/log/jellyfin-backup.log
-        line: "[{{ ansible_date_time.iso8601 }}] Snapshot created: {{ _snapshot.stdout }}"
+        line: "[{{ ansible_facts.date_time.iso8601 }}] Snapshot created: {{ _snapshot.stdout }}"
         create: true
         mode: "0644"

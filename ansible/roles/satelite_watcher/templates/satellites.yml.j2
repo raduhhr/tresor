@@ -1,0 +1,27 @@
+satellites:
+{% for satellite in satelite_watcher_satellites %}
+  - name: {{ satellite.name }}
+    decode_profile: {{ satellite.decode_profile | default('meteor_lrpt') }}
+    record_enabled: {{ 'true' if satellite.record_enabled | default(true) | bool else 'false' }}
+{% if satellite.norad_id is defined %}
+    norad_id: {{ satellite.norad_id }}
+{% endif %}
+{% if satellite.tle_name is defined %}
+    tle_name: {{ satellite.tle_name }}
+{% endif %}
+    frequency_hz: {{ satellite.frequency_hz }}
+{% endfor %}
+{% if satelite_watcher_noaa_apt_enabled | bool %}
+{% for satellite in satelite_watcher_noaa_apt_satellites %}
+  - name: {{ satellite.name }}
+    decode_profile: {{ satellite.decode_profile | default('noaa_apt') }}
+    record_enabled: {{ 'true' if satellite.record_enabled | default(true) | bool else 'false' }}
+{% if satellite.norad_id is defined %}
+    norad_id: {{ satellite.norad_id }}
+{% endif %}
+{% if satellite.tle_name is defined %}
+    tle_name: {{ satellite.tle_name }}
+{% endif %}
+    frequency_hz: {{ satellite.frequency_hz }}
+{% endfor %}
+{% endif %}

@@ -1,0 +1,5 @@
+# Managed by Ansible: restricted vot-FE publisher
+Defaults:{{ vot_fe_deploy_user }} !lecture
+Defaults:{{ vot_fe_deploy_user }} !requiretty
+
+{{ vot_fe_deploy_user }} ALL=(root) NOPASSWD: {{ vot_fe_promote_path }} *

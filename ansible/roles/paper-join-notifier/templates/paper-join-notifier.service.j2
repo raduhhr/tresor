@@ -1,0 +1,22 @@
+[Unit]
+Description=Tresor Minecraft Discord join notifier
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ paper_join_notifier_run_user }}
+Group={{ paper_join_notifier_run_group }}
+EnvironmentFile={{ paper_join_notifier_env_file }}
+ExecStart={{ paper_join_notifier_python_bin }} {{ paper_join_notifier_script_path }}
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths={{ paper_data_dir }}
+
+[Install]
+WantedBy=multi-user.target

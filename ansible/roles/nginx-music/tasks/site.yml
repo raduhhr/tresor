@@ -1,0 +1,171 @@
+---
+- name: "[site] Ensure static root exists"
+  become: true
+  ansible.builtin.file:
+    path: "{{ nginx_site_root }}"
+    state: directory
+    mode: "0755"
+
+- name: "[site] Ensure ACME webroot exists"
+  become: true
+  ansible.builtin.file:
+    path: /var/www/html
+    state: directory
+    mode: "0755"
+
+- name: "[site] Stat LE cert for {{ nginx_site_domain }}"
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ nginx_site_domain }}/fullchain.pem"
+  register: _site_cert
+
+- name: "[site] Render HTTP bootstrap config"
+  become: true
+  ansible.builtin.template:
+    src: site.http.nginx.j2
+    dest: "/etc/nginx/sites-available/{{ nginx_site_config_name }}"
+    mode: "0644"
+  when:
+    - not (nginx_site_enable_tls | bool and _site_cert.stat.exists | bool)
+
+- name: "[site] Enable static site vhost symlink"
+  become: true
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/{{ nginx_site_config_name }}"
+    dest: "/etc/nginx/sites-enabled/{{ nginx_site_config_name }}"
+    state: link
+
+- name: "[site] nginx -t (bootstrap)"
+  become: true
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  when:
+    - not (nginx_site_enable_tls | bool and _site_cert.stat.exists | bool)
+
+- name: "[site] Reload nginx (bootstrap live)"
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when:
+    - not (nginx_site_enable_tls | bool and _site_cert.stat.exists | bool)
+
+- name: "[site] Resolve ACME email"
+  ansible.builtin.set_fact:
+    _site_acme_email: >-
+      {{
+        (nginx_music_acme_email | default(''))
+        if (nginx_music_acme_email | default('') | length > 0
+            and nginx_music_acme_email | default('') != 'you@domain.tld')
+        else (vault_acme_email | default(''))
+      }}
+  when: nginx_site_enable_tls | bool
+
+- name: "[site] Assert ACME email is set"
+  ansible.builtin.assert:
+    that: _site_acme_email | length > 0
+    fail_msg: >-
+      No ACME email found. Set nginx_music_acme_email or vault_acme_email.
+  when:
+    - nginx_site_enable_tls | bool
+    - nginx_site_obtain_cert | bool or _site_cert.stat.exists | bool
+
+- name: "[site] Obtain LE cert via certbot (webroot)"
+  become: true
+  ansible.builtin.shell: >
+    certbot certonly
+    --webroot
+    --webroot-path /var/www/html
+    -d {{ nginx_site_domain }}
+    {% for alias in nginx_site_aliases %}-d {{ alias }} {% endfor %}
+    --agree-tos
+    --email {{ _site_acme_email }}
+    --non-interactive
+  register: _site_certbot
+  when:
+    - nginx_site_enable_tls | bool
+    - nginx_site_obtain_cert | bool
+    - not _site_cert.stat.exists
+  failed_when: >-
+    (_site_certbot.rc | default(0) != 0)
+    and
+    (
+      'unauthorized'
+      not in (((_site_certbot.stdout | default('')) ~ ' ' ~ (_site_certbot.stderr | default(''))) | lower)
+    )
+    and
+    (
+      'invalid response from http://'
+      not in (((_site_certbot.stdout | default('')) ~ ' ' ~ (_site_certbot.stderr | default(''))) | lower)
+    )
+  changed_when: _site_certbot.rc | default(1) == 0
+
+- name: "[site] Show certbot stderr on failure"
+  ansible.builtin.debug:
+    msg: "{{ _site_certbot.stderr | default('(no output)') }}"
+  when:
+    - nginx_site_enable_tls | bool
+    - nginx_site_obtain_cert | bool
+    - not _site_cert.stat.exists
+    - _site_certbot.rc | default(0) != 0
+
+- name: "[site] Explain TLS pending after bootstrap"
+  ansible.builtin.debug:
+    msg:
+      - "Bootstrap vhost is live, but TLS was not enabled yet."
+      - "The ACME challenge did not validate from the public internet."
+      - "After Cloudflare DNS for raduhhr.xyz and www points to this VPS, rerun the same playbook and certbot should complete."
+  when:
+    - nginx_site_enable_tls | bool
+    - nginx_site_obtain_cert | bool
+    - not _site_cert.stat.exists
+    - _site_certbot.rc | default(0) != 0
+
+- name: "[site] Initialize post-cert state"
+  ansible.builtin.set_fact:
+    _site_cert_after:
+      stat:
+        exists: false
+
+- name: "[site] Preserve existing cert state when already present"
+  ansible.builtin.set_fact:
+    _site_cert_after: "{{ _site_cert }}"
+  when:
+    - nginx_site_enable_tls | bool
+    - _site_cert.stat.exists | bool
+
+- name: "[site] Re-stat cert after certbot"
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ nginx_site_domain }}/fullchain.pem"
+  register: _site_cert_after
+  when:
+    - nginx_site_enable_tls | bool
+    - nginx_site_obtain_cert | bool
+
+- name: "[site] Render TLS static site config"
+  become: true
+  ansible.builtin.template:
+    src: site.tls.nginx.j2
+    dest: "/etc/nginx/sites-available/{{ nginx_site_config_name }}"
+    mode: "0644"
+  when:
+    - nginx_site_enable_tls | bool
+    - _site_cert_after.stat.exists | bool
+
+- name: "[site] nginx -t (TLS)"
+  become: true
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  when:
+    - nginx_site_enable_tls | bool
+    - _site_cert_after.stat.exists | bool
+
+- name: "[site] Reload nginx (TLS config live)"
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when:
+    - nginx_site_enable_tls | bool
+    - _site_cert_after.stat.exists | bool

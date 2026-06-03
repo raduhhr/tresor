@@ -1,0 +1,15 @@
+---
+- name: Restart Tresor Index
+  hosts: tresor
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop Tresor Index containers
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: stop
+
+    - name: Start Tresor Index containers
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: start

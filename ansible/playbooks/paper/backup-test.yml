@@ -32,7 +32,8 @@
 
   vars:
     backup_dir: "/mnt/data/files/Backups/paper"
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
     paper_container: "paper"
     confirm_test: "no"
 
@@ -64,7 +65,7 @@
         set -eu
         DATE=$(date +%d%m%Y-%H%M)
         SNAPSHOT="{{ backup_dir }}/paper-backup-$DATE.tar.gz"
-        tar -czf "$SNAPSHOT" -C /mnt/ssd/services paper
+        tar -czf "$SNAPSHOT" -C "{{ paper_data_parent }}" "{{ paper_data_leaf }}"
         echo "$SNAPSHOT"
       register: _fresh_backup
 
@@ -93,7 +94,8 @@
   gather_facts: false
 
   vars:
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
 
   tasks:
 
@@ -145,7 +147,8 @@
   gather_facts: false
 
   vars:
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
     confirm_test: "no"
 
   tasks:
@@ -194,7 +197,8 @@
   gather_facts: false
 
   vars:
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
     paper_container: "paper"
 
   tasks:
@@ -242,7 +246,8 @@
   gather_facts: false
 
   vars:
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
     paper_uid: 1000
     paper_gid: 1000
 
@@ -250,13 +255,13 @@
 
     - name: Ensure parent directory exists
       ansible.builtin.file:
-        path: /mnt/ssd/services
+        path: "{{ paper_data_parent }}"
         state: directory
         mode: '0755'
 
     - name: Extract backup tarball
       ansible.builtin.shell: |
-        tar -xzf "{{ test_backup_file }}" -C /mnt/ssd/services
+        tar -xzf "{{ test_backup_file }}" -C "{{ paper_data_parent }}"
       register: _extract
 
     - name: Verify paper directory was restored
@@ -292,7 +297,8 @@
   gather_facts: false
 
   vars:
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
     paper_container: "paper"
     wg_bind_ip: "{{ hostvars[inventory_hostname].wg_ip | default(hostvars[inventory_hostname].wg_bind_ip | default('10.66.66.2')) }}"
 

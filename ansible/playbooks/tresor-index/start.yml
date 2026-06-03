@@ -1,0 +1,10 @@
+---
+- name: Start Tresor Index
+  hosts: tresor
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Start Tresor Index containers
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: start

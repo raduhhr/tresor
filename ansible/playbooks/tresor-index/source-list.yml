@@ -1,0 +1,11 @@
+---
+- name: List configured Tresor Index sources
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: List configured Tresor Index sources
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: source-list

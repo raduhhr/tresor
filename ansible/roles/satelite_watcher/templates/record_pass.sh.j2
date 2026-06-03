@@ -1,0 +1,502 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PASS_ID="${1:?pass id is required}"
+PYTHON_BIN="{{ satelite_watcher_python_bin }}"
+CONFIG_FILE="{{ satelite_watcher_config_dir }}/config.yml"
+PASS_METADATA_DIR="{{ satelite_watcher_pass_metadata_dir }}"
+SATDUMP_BIN="{{ satelite_watcher_satdump_bin }}"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "python runtime missing at $PYTHON_BIN" >&2
+  exit 1
+fi
+
+PASS_METADATA_FILE="$PASS_METADATA_DIR/$PASS_ID.json"
+if [[ ! -f "$PASS_METADATA_FILE" ]]; then
+  echo "pass metadata missing at $PASS_METADATA_FILE" >&2
+  exit 1
+fi
+
+cd "{{ satelite_watcher_root }}"
+
+eval "$("$PYTHON_BIN" - "$PASS_ID" "$CONFIG_FILE" "$PASS_METADATA_FILE" <<'PY'
+import json
+import re
+import shlex
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import yaml
+
+
+def slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+pass_id, config_path, pass_metadata_path = sys.argv[1:]
+with open(config_path, "r", encoding="utf-8") as handle:
+    config = yaml.safe_load(handle) or {}
+with open(pass_metadata_path, "r", encoding="utf-8") as handle:
+    selected = json.load(handle)
+if selected["pass_id"] != pass_id:
+    raise SystemExit(f"pass metadata mismatch: {pass_id}")
+
+record_start = datetime.fromisoformat(selected["record_start_utc"]).astimezone()
+month_bucket = record_start.strftime("%B %Y")
+day_bucket = record_start.strftime("%Y-%m-%d")
+timestamp = record_start.strftime("%Y%m%dT%H%M%S")
+slug = slugify(selected["satellite"])
+run_name = f"{timestamp}_{slug}_{pass_id}"
+paths = config.get("paths", {})
+output_root = Path(paths.get("output_base_dir") or paths["recordings_dir"])
+run_dir = output_root / month_bucket / day_bucket / run_name
+out_base = run_dir / run_name
+metadata_path = run_dir / "metadata.json"
+decode_root = config.get("decode", {})
+decode_profile = str(selected.get("decode_profile") or "meteor_lrpt")
+decode_cfg = decode_root.get("satelite_watcher_after_record", {})
+if decode_profile == "noaa_apt":
+    decode_cfg = decode_root.get("noaa_apt", {})
+image_cfg = config.get("decode", {}).get("image_after_decode", {})
+decode_output_dir = run_dir / str(decode_cfg.get("output_dir_name", "decoded"))
+images_output_dir = run_dir / str(image_cfg.get("output_dir_name", "images"))
+nominal_frequency_hz = int(selected["frequency_hz"])
+record_frequency_offset_hz = int(config.get("sdr", {}).get("record_frequency_offset_hz", 0) or 0)
+tuned_frequency_hz = nominal_frequency_hz + record_frequency_offset_hz
+decode_freq_shift_hz = int(decode_cfg.get("freq_shift_hz", -record_frequency_offset_hz) or 0)
+
+shell_vars = {
+    "OUTPUT_ROOT": str(output_root),
+    "MONTH_BUCKET": month_bucket,
+    "DAY_BUCKET": day_bucket,
+    "RUN_NAME": run_name,
+    "RUN_DIR": str(run_dir),
+    "OUT_DIR": str(run_dir),
+    "OUT_BASE": str(out_base),
+    "METADATA_PATH": str(metadata_path),
+    "DECODE_PROFILE": decode_profile,
+    "SATELLITE_NAME": selected["satellite"],
+    "FREQUENCY_HZ": str(nominal_frequency_hz),
+    "RECORD_FREQUENCY_OFFSET_HZ": str(record_frequency_offset_hz),
+    "TUNED_FREQUENCY_HZ": str(tuned_frequency_hz),
+    "TIMEOUT_SECONDS": str(selected["timeout_seconds"]),
+    "AOS_UTC": selected["aos_utc"],
+    "TCA_UTC": selected["tca_utc"],
+    "LOS_UTC": selected["los_utc"],
+    "PEAK_AZIMUTH_LABEL": selected["peak_azimuth_label"],
+    "MAX_ELEVATION_DEG": str(selected["max_elevation_deg"]),
+    "SAMPLERATE": str(config["sdr"]["samplerate"]),
+    "GAIN": str(config["sdr"]["gain"]),
+    "SOURCE": str(config["sdr"]["source"]),
+    "SOURCE_ID": str(config["sdr"].get("device_id", "")),
+    "BASEBAND_FORMAT": str(config["sdr"]["baseband_format"]),
+    "DECODE_ENABLED": str(decode_cfg.get("enabled", False)).lower(),
+    "DECODE_PIPELINE": str(decode_cfg.get("pipeline", "meteor_m2-x_lrpt")),
+    "DECODE_SOURCE_MODE": str(decode_cfg.get("source_mode", "baseband")),
+    "DECODE_FREQ_SHIFT_HZ": str(decode_freq_shift_hz),
+    "DECODE_DC_BLOCK": str(decode_cfg.get("dc_block", False)).lower(),
+    "DECODE_IQ_SWAP": str(decode_cfg.get("iq_swap", False)).lower(),
+    "DECODE_OUTPUT_DIR": str(decode_output_dir),
+    "DECODE_LOG_FILE": str(run_dir / "satdump-decode.log"),
+    "DECODE_TARGET_SATELLITES": ",".join(decode_cfg.get("target_satellites", [])),
+    "IMAGE_ENABLED": str(image_cfg.get("enabled", False)).lower(),
+    "IMAGES_OUTPUT_DIR": str(images_output_dir),
+    "TIMEZONE": str(config.get("timezone", "UTC")),
+    "RECORDING_PAUSED": str(config.get("schedule", {}).get("recording_paused", False)).lower(),
+    "RECORDING_PAUSE_REASON": str(config.get("schedule", {}).get("recording_pause_reason", "")),
+    "PLANE_WATCHER_CONTAINER_NAME": "plane-watcher",
+}
+
+for key, value in shell_vars.items():
+    print(f"{key}={shlex.quote(value)}")
+PY
+)"
+
+mkdir -p "$RUN_DIR"
+STARTED_AT="$(date --iso-8601=seconds)"
+
+"$PYTHON_BIN" - "$METADATA_PATH" "$PASS_ID" "$SATDUMP_BIN" "$STARTED_AT" "$OUTPUT_ROOT" "$MONTH_BUCKET" "$DAY_BUCKET" "$RUN_NAME" "$RUN_DIR" "$OUT_BASE" "$DECODE_PROFILE" "$SATELLITE_NAME" "$FREQUENCY_HZ" "$RECORD_FREQUENCY_OFFSET_HZ" "$TUNED_FREQUENCY_HZ" "$DECODE_FREQ_SHIFT_HZ" "$TIMEOUT_SECONDS" "$AOS_UTC" "$TCA_UTC" "$LOS_UTC" "$PEAK_AZIMUTH_LABEL" "$MAX_ELEVATION_DEG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(
+    metadata_path,
+    pass_id,
+    satdump_bin,
+    started_at,
+    output_root,
+    month_bucket,
+    day_bucket,
+    run_name,
+    run_dir,
+    out_base,
+    decode_profile,
+    satellite_name,
+    frequency_hz,
+    record_frequency_offset_hz,
+    tuned_frequency_hz,
+    decode_freq_shift_hz,
+    timeout_seconds,
+    aos_utc,
+    tca_utc,
+    los_utc,
+    peak_azimuth_label,
+    max_elevation_deg,
+) = sys.argv[1:]
+
+payload = {
+    "pass_id": pass_id,
+    "satellite": satellite_name,
+    "stage": "recording",
+    "started_at": started_at,
+    "output_root": output_root,
+    "month_bucket": month_bucket,
+    "day_bucket": day_bucket,
+    "run_name": run_name,
+    "run_dir": run_dir,
+    "output_base": out_base,
+    "decode_profile": decode_profile,
+    "frequency_hz": int(frequency_hz),
+    "timeout_seconds": int(timeout_seconds),
+    "aos_utc": aos_utc,
+    "tca_utc": tca_utc,
+    "los_utc": los_utc,
+    "peak_azimuth_label": peak_azimuth_label,
+    "max_elevation_deg": float(max_elevation_deg),
+    "satdump_bin": satdump_bin,
+    "record_frequency_offset_hz": int(record_frequency_offset_hz),
+    "tuned_frequency_hz": int(tuned_frequency_hz),
+    "decode_freq_shift_hz": int(decode_freq_shift_hz),
+}
+
+Path(metadata_path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+cp -f -- "$METADATA_PATH" "$PASS_METADATA_FILE"
+
+PLANE_WATCHER_WAS_RUNNING="false"
+cleanup() {
+  local rc=$?
+  trap - EXIT
+  if [[ "$PLANE_WATCHER_WAS_RUNNING" == "true" ]]; then
+    if docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' "$PLANE_WATCHER_CONTAINER_NAME" >/dev/null 2>&1; then
+      if [[ "$(docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' "$PLANE_WATCHER_CONTAINER_NAME" 2>/dev/null)" != "true" ]]; then
+        echo "restarting $PLANE_WATCHER_CONTAINER_NAME after satellite recording"
+        docker start "$PLANE_WATCHER_CONTAINER_NAME" >/dev/null 2>&1 || echo "warning: failed to restart $PLANE_WATCHER_CONTAINER_NAME" >&2
+      fi
+    fi
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+
+PAUSE_TRIGGER=""
+if [[ "$RECORDING_PAUSED" == "true" ]]; then
+  PAUSE_TRIGGER="${RECORDING_PAUSE_REASON:-recording paused by configuration}"
+fi
+if [[ -z "$PAUSE_TRIGGER" ]] && docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' "$PLANE_WATCHER_CONTAINER_NAME" >/dev/null 2>&1; then
+  if [[ "$(docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' "$PLANE_WATCHER_CONTAINER_NAME" 2>/dev/null)" == "true" ]]; then
+    echo "stopping $PLANE_WATCHER_CONTAINER_NAME to free the SDR for satellite recording"
+    if docker stop -t 45 "$PLANE_WATCHER_CONTAINER_NAME" >/dev/null 2>&1; then
+      PLANE_WATCHER_WAS_RUNNING="true"
+      sleep 5
+    else
+      PAUSE_TRIGGER="failed to stop $PLANE_WATCHER_CONTAINER_NAME before recording"
+    fi
+  fi
+fi
+
+EXPECTED_SUFFIX=".$BASEBAND_FORMAT"
+case "$BASEBAND_FORMAT" in
+  w16)
+    EXPECTED_SUFFIX=".wav"
+    ;;
+esac
+EXPECTED_FILE="${OUT_BASE}${EXPECTED_SUFFIX}"
+RESULT="success"
+VERIFY_MESSAGE=""
+DECODE_RESULT="skipped"
+DECODE_VERIFY_MESSAGE="decode skipped"
+DECODE_EXIT_CODE=""
+DECODE_STARTED_AT=""
+DECODE_ENDED_AT=""
+IMAGE_RESULT="skipped"
+IMAGE_VERIFY_MESSAGE="image generation skipped"
+IMAGE_FILES_JSON="[]"
+IMAGE_STARTED_AT=""
+IMAGE_ENDED_AT=""
+EXIT_CODE=0
+
+if [[ -n "$PAUSE_TRIGGER" ]]; then
+  RESULT="paused"
+  VERIFY_MESSAGE="$PAUSE_TRIGGER"
+else
+  CMD=(
+    "$SATDUMP_BIN"
+    record
+    "$OUT_BASE"
+    --source "$SOURCE"
+    --source_id "$SOURCE_ID"
+    --samplerate "$SAMPLERATE"
+    --frequency "$TUNED_FREQUENCY_HZ"
+    --gain "$GAIN"
+    --timeout "$TIMEOUT_SECONDS"
+    --baseband_format "$BASEBAND_FORMAT"
+  )
+
+  set +e
+  "${CMD[@]}"
+  EXIT_CODE=$?
+  set -e
+
+  if [[ "$EXIT_CODE" -ne 0 ]]; then
+    RESULT="failed"
+    VERIFY_MESSAGE="satdump exited with code $EXIT_CODE"
+  elif [[ ! -f "$EXPECTED_FILE" ]]; then
+    RESULT="failed"
+    VERIFY_MESSAGE="expected output not found: $EXPECTED_FILE"
+  elif [[ ! -s "$EXPECTED_FILE" ]]; then
+    RESULT="failed"
+    VERIFY_MESSAGE="output file exists but is empty: $EXPECTED_FILE"
+  else
+    FILE_SIZE_BYTES="$(stat -c '%s' "$EXPECTED_FILE")"
+    VERIFY_MESSAGE="recording verified: ${FILE_SIZE_BYTES} bytes at $EXPECTED_FILE"
+  fi
+fi
+
+echo "$VERIFY_MESSAGE"
+
+if [[ "$RESULT" == "success" ]]; then
+  SHOULD_DECODE="false"
+  if [[ "$DECODE_ENABLED" == "true" ]]; then
+    if [[ -z "$DECODE_TARGET_SATELLITES" ]]; then
+      SHOULD_DECODE="true"
+    else
+      IFS=',' read -r -a DECODE_TARGET_LIST <<< "$DECODE_TARGET_SATELLITES"
+      for TARGET_NAME in "${DECODE_TARGET_LIST[@]}"; do
+        if [[ "$SATELLITE_NAME" == "$TARGET_NAME" ]]; then
+          SHOULD_DECODE="true"
+          break
+        fi
+      done
+    fi
+  fi
+
+  if [[ "$SHOULD_DECODE" == "true" ]]; then
+    mkdir -p "$DECODE_OUTPUT_DIR"
+    DECODE_STARTED_AT="$(date --iso-8601=seconds)"
+    DECODE_CMD=(
+      "$SATDUMP_BIN"
+      "$DECODE_PIPELINE"
+      "$DECODE_SOURCE_MODE"
+      "$EXPECTED_FILE"
+      "$DECODE_OUTPUT_DIR"
+      --samplerate "$SAMPLERATE"
+      --baseband_format "$BASEBAND_FORMAT"
+    )
+    if [[ "$DECODE_FREQ_SHIFT_HZ" != "0" ]]; then
+      DECODE_CMD+=(--freq_shift "$DECODE_FREQ_SHIFT_HZ")
+    fi
+    if [[ "$DECODE_DC_BLOCK" == "true" ]]; then
+      DECODE_CMD+=(--dc_block)
+    fi
+    if [[ "$DECODE_IQ_SWAP" == "true" ]]; then
+      DECODE_CMD+=(--iq_swap)
+    fi
+
+    set +e
+    "${DECODE_CMD[@]}" > >(tee "$DECODE_LOG_FILE") 2>&1
+    DECODE_EXIT_CODE=${PIPESTATUS[0]}
+    set -e
+    DECODE_ENDED_AT="$(date --iso-8601=seconds)"
+
+    FIRST_DECODE_FILE="$(find "$DECODE_OUTPUT_DIR" -type f -print -quit 2>/dev/null || true)"
+    if [[ "$DECODE_EXIT_CODE" -ne 0 ]]; then
+      DECODE_RESULT="failed"
+      DECODE_VERIFY_MESSAGE="decode exited with code $DECODE_EXIT_CODE"
+    elif [[ -z "$FIRST_DECODE_FILE" ]]; then
+      DECODE_RESULT="failed"
+      DECODE_VERIFY_MESSAGE="decode output directory is empty: $DECODE_OUTPUT_DIR"
+    else
+      DECODE_RESULT="success"
+      DECODE_VERIFY_MESSAGE="decode verified: output at $DECODE_OUTPUT_DIR"
+    fi
+  else
+    DECODE_VERIFY_MESSAGE="decode skipped for satellite: $SATELLITE_NAME"
+  fi
+fi
+
+echo "$DECODE_VERIFY_MESSAGE"
+
+if [[ "$DECODE_RESULT" == "success" && "$IMAGE_ENABLED" == "true" ]]; then
+  mkdir -p "$IMAGES_OUTPUT_DIR"
+  IMAGE_STARTED_AT="$(date --iso-8601=seconds)"
+  set +e
+  IMAGE_TOOL_OUTPUT="$("$PYTHON_BIN" - "$DECODE_OUTPUT_DIR" "$IMAGES_OUTPUT_DIR" <<'PY'
+import json
+import shutil
+import sys
+from pathlib import Path
+
+decode_dir = Path(sys.argv[1])
+images_dir = Path(sys.argv[2])
+image_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+
+if not decode_dir.exists():
+    print(json.dumps({"result": "failed", "message": f"decoded directory missing: {decode_dir}", "files": []}))
+    raise SystemExit(1)
+
+images_dir.mkdir(parents=True, exist_ok=True)
+copied = []
+for source in sorted(decode_dir.rglob("*")):
+    if not source.is_file() or source.suffix.lower() not in image_exts:
+        continue
+    try:
+        source.relative_to(images_dir)
+        continue
+    except ValueError:
+        pass
+
+    target = images_dir / source.name
+    if target.exists():
+        target = images_dir / f"{source.stem}_{len(copied) + 1}{source.suffix}"
+    shutil.copy2(source, target)
+    copied.append(str(target))
+
+manifest = images_dir / "manifest.json"
+manifest.write_text(json.dumps({"images": copied}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+if not copied:
+    print(json.dumps({"result": "none", "message": f"no image files found under decoded output: {decode_dir}", "files": []}))
+    raise SystemExit(0)
+
+print(json.dumps({"result": "success", "message": f"image files collected in {images_dir}", "files": copied}))
+PY
+)"
+  IMAGE_EXIT_CODE=$?
+  set -e
+  IMAGE_ENDED_AT="$(date --iso-8601=seconds)"
+
+  if [[ "$IMAGE_EXIT_CODE" -ne 0 ]]; then
+    IMAGE_RESULT="failed"
+  elif "$PYTHON_BIN" - "$IMAGE_TOOL_OUTPUT" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if payload.get("result") == "none" else 1)
+PY
+  then
+    IMAGE_RESULT="none"
+  else
+    IMAGE_RESULT="success"
+  fi
+
+  eval "$("$PYTHON_BIN" - "$IMAGE_TOOL_OUTPUT" <<'PY'
+import json
+import shlex
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    payload = {"message": sys.argv[1], "files": []}
+
+print(f"IMAGE_VERIFY_MESSAGE={shlex.quote(str(payload.get('message', 'image generation failed')))}")
+print(f"IMAGE_FILES_JSON={shlex.quote(json.dumps(payload.get('files', [])))}")
+PY
+)"
+elif [[ "$DECODE_RESULT" == "success" ]]; then
+  IMAGE_VERIFY_MESSAGE="image generation disabled"
+elif [[ "$DECODE_RESULT" == "failed" ]]; then
+  IMAGE_VERIFY_MESSAGE="image generation skipped because decode failed"
+fi
+
+echo "$IMAGE_VERIFY_MESSAGE"
+
+ENDED_AT="$(date --iso-8601=seconds)"
+"$PYTHON_BIN" - "$METADATA_PATH" "$EXIT_CODE" "$ENDED_AT" "$RESULT" "$EXPECTED_FILE" "$VERIFY_MESSAGE" "$DECODE_RESULT" "$DECODE_OUTPUT_DIR" "$DECODE_VERIFY_MESSAGE" "$DECODE_EXIT_CODE" "$DECODE_STARTED_AT" "$DECODE_ENDED_AT" "$DECODE_LOG_FILE" "$DECODE_FREQ_SHIFT_HZ" "$DECODE_DC_BLOCK" "$DECODE_IQ_SWAP" "$IMAGE_RESULT" "$IMAGES_OUTPUT_DIR" "$IMAGE_VERIFY_MESSAGE" "$IMAGE_FILES_JSON" "$IMAGE_STARTED_AT" "$IMAGE_ENDED_AT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(
+    metadata_path,
+    exit_code,
+    ended_at,
+    result,
+    expected_file,
+    verify_message,
+    decode_result,
+    decode_output_dir,
+    decode_verify_message,
+    decode_exit_code,
+    decode_started_at,
+    decode_ended_at,
+    decode_log_file,
+    decode_freq_shift_hz,
+    decode_dc_block,
+    decode_iq_swap,
+    image_result,
+    images_output_dir,
+    image_verify_message,
+    image_files_json,
+    image_started_at,
+    image_ended_at,
+) = sys.argv[1:]
+payload = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+payload["ended_at"] = ended_at
+payload["exit_code"] = int(exit_code)
+payload["stage"] = result
+payload["expected_output_file"] = expected_file
+payload["verification_message"] = verify_message
+if result == "success":
+    try:
+        payload["output_size_bytes"] = Path(expected_file).stat().st_size
+    except FileNotFoundError:
+        payload["output_size_bytes"] = 0
+payload["decode_stage"] = decode_result
+payload["decode_output_dir"] = decode_output_dir
+payload["decode_verification_message"] = decode_verify_message
+if decode_exit_code:
+    payload["decode_exit_code"] = int(decode_exit_code)
+if decode_started_at:
+    payload["decode_started_at"] = decode_started_at
+if decode_ended_at:
+    payload["decode_ended_at"] = decode_ended_at
+if decode_log_file:
+    payload["decode_log_file"] = decode_log_file
+payload["decode_freq_shift_hz"] = int(decode_freq_shift_hz)
+payload["decode_dc_block"] = decode_dc_block == "true"
+payload["decode_iq_swap"] = decode_iq_swap == "true"
+payload["image_stage"] = image_result
+payload["images_output_dir"] = images_output_dir
+payload["image_verification_message"] = image_verify_message
+try:
+    payload["image_files"] = json.loads(image_files_json)
+except json.JSONDecodeError:
+    payload["image_files"] = []
+if image_result == "none":
+    payload["image_note"] = "SatDump decoded data but did not emit image files."
+if image_started_at:
+    payload["image_started_at"] = image_started_at
+if image_ended_at:
+    payload["image_ended_at"] = image_ended_at
+Path(metadata_path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+cp -f -- "$METADATA_PATH" "$PASS_METADATA_FILE"
+
+if [[ "$RESULT" != "success" && "$RESULT" != "paused" && "$EXIT_CODE" -eq 0 ]]; then
+  exit 1
+fi
+
+if [[ "$RESULT" == "success" && "$DECODE_RESULT" == "failed" ]]; then
+  exit 1
+fi
+
+exit "$EXIT_CODE"

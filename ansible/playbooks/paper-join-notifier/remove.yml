@@ -1,0 +1,27 @@
+---
+- name: Remove Paper Discord join notifier
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop and disable service
+      ansible.builtin.systemd:
+        name: paper-join-notifier
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove systemd unit
+      ansible.builtin.file:
+        path: /etc/systemd/system/paper-join-notifier.service
+        state: absent
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Remove app dir
+      ansible.builtin.file:
+        path: /opt/paper-join-notifier
+        state: absent

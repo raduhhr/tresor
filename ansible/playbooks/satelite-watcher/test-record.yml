@@ -1,0 +1,385 @@
+---
+- name: Run Satelite Watcher test recording
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_test_timeout_seconds: 20
+    satelite_watcher_test_label: test
+    satelite_watcher_live_config_file: /opt/satelite-watcher/config/config.yml
+    satelite_watcher_live_satellites_file: /opt/satelite-watcher/config/satellites.yml
+    satelite_watcher_test_user: satelite-watcher
+    satelite_watcher_test_group: satelite-watcher
+    satelite_watcher_test_home: /opt/satelite-watcher
+    satelite_watcher_test_xdg_config_home: /opt/satelite-watcher/.config
+    satelite_watcher_test_satellite_name: "{{ satellite | default('') }}"
+
+  tasks:
+    - name: Assert Satelite watcher recorder is enabled
+      ansible.builtin.assert:
+        that:
+          - satelite_watcher_enabled | bool
+        fail_msg: "Satelite watcher recorder must be enabled and have at least one configured satellite."
+
+    - name: Read deployed Satelite Watcher config
+      ansible.builtin.slurp:
+        src: "{{ satelite_watcher_live_config_file }}"
+      register: satelite_watcher_live_config_raw
+
+    - name: Read deployed Satelite Watcher satellite definitions
+      ansible.builtin.slurp:
+        src: "{{ satelite_watcher_live_satellites_file }}"
+      register: satelite_watcher_live_satellites_raw
+
+    - name: Parse deployed Satelite Watcher config
+      ansible.builtin.set_fact:
+        satelite_watcher_live_config: "{{ satelite_watcher_live_config_raw.content | b64decode | from_yaml }}"
+        satelite_watcher_live_satellites_cfg: "{{ satelite_watcher_live_satellites_raw.content | b64decode | from_yaml }}"
+
+    - name: Assert deployed Satelite Watcher config has a target satellite
+      ansible.builtin.assert:
+        that:
+          - (satelite_watcher_live_satellites_cfg.satellites | default([]) | length) > 0
+        fail_msg: "No deployed Satelite Watcher satellites found in /opt/satelite-watcher/config/satellites.yml"
+
+    - name: Select test satellite
+      ansible.builtin.set_fact:
+        satelite_watcher_test_satellite_matches: "{{ (satelite_watcher_live_satellites_cfg.satellites | default([])) | selectattr('name', 'equalto', satelite_watcher_test_satellite_name) | list }}"
+
+    - name: Assert requested test satellite exists
+      ansible.builtin.assert:
+        that:
+          - (satelite_watcher_test_satellite_name | trim | length) == 0 or (satelite_watcher_test_satellite_matches | length) > 0
+        fail_msg: >-
+          Requested test satellite {{ satelite_watcher_test_satellite_name }} is not in
+          /opt/satelite-watcher/config/satellites.yml.
+
+    - name: Build selected test satellite facts
+      ansible.builtin.set_fact:
+        satelite_watcher_test_satellite: "{{ (satelite_watcher_test_satellite_matches[0]) if (satelite_watcher_test_satellite_name | trim | length) > 0 else ((satelite_watcher_live_satellites_cfg.satellites | default([]))[0]) }}"
+        satelite_watcher_test_satellite_slug: >-
+          {{
+            (
+              (satelite_watcher_test_satellite_matches[0].name)
+              if (satelite_watcher_test_satellite_name | trim | length) > 0
+              else (((satelite_watcher_live_satellites_cfg.satellites | default([]))[0]).name)
+            )
+            | lower
+            | regex_replace('[^a-z0-9]+', '-')
+            | regex_replace('(^-|-$)', '')
+          }}
+
+    - name: Build selected test decode profile
+      ansible.builtin.set_fact:
+        satelite_watcher_test_decode_profile: "{{ satelite_watcher_test_satellite.decode_profile | default('meteor_lrpt') }}"
+        satelite_watcher_test_decode_config_key: "{{ 'noaa_apt' if (satelite_watcher_test_satellite.decode_profile | default('meteor_lrpt')) == 'noaa_apt' else 'satelite_watcher_after_record' }}"
+
+    - name: Capture local recording timestamp on Tresor
+      ansible.builtin.command: date '+%B %Y|%Y-%m-%d|%Y%m%dT%H%M%S|%z'
+      register: satelite_watcher_test_clock
+      changed_when: false
+
+    - name: Build test recording paths
+      ansible.builtin.set_fact:
+        satelite_watcher_test_month_bucket: "{{ satelite_watcher_test_clock.stdout.split('|')[0] }}"
+        satelite_watcher_test_date_bucket: "{{ satelite_watcher_test_clock.stdout.split('|')[1] }}"
+        satelite_watcher_test_timestamp: "{{ satelite_watcher_test_clock.stdout.split('|')[2] }}"
+        satelite_watcher_test_tz_offset: "{{ satelite_watcher_test_clock.stdout.split('|')[3] }}"
+        satelite_watcher_test_output_root: "{{ satelite_watcher_live_config.paths.output_base_dir | default(satelite_watcher_live_config.paths.recordings_dir) }}"
+        satelite_watcher_test_run_name: "test_{{ satelite_watcher_test_clock.stdout.split('|')[2] }}_{{ satelite_watcher_test_satellite_slug }}"
+        satelite_watcher_test_output_dir: "{{ (satelite_watcher_live_config.paths.output_base_dir | default(satelite_watcher_live_config.paths.recordings_dir)) }}/{{ satelite_watcher_test_clock.stdout.split('|')[0] }}/{{ satelite_watcher_test_clock.stdout.split('|')[1] }}/test_{{ satelite_watcher_test_clock.stdout.split('|')[2] }}_{{ satelite_watcher_test_satellite_slug }}"
+        satelite_watcher_test_output_base: "{{ (satelite_watcher_live_config.paths.output_base_dir | default(satelite_watcher_live_config.paths.recordings_dir)) }}/{{ satelite_watcher_test_clock.stdout.split('|')[0] }}/{{ satelite_watcher_test_clock.stdout.split('|')[1] }}/test_{{ satelite_watcher_test_clock.stdout.split('|')[2] }}_{{ satelite_watcher_test_satellite_slug }}/test_{{ satelite_watcher_test_clock.stdout.split('|')[2] }}_{{ satelite_watcher_test_satellite_slug }}"
+        satelite_watcher_test_baseband_format: "{{ satelite_watcher_live_config.sdr.baseband_format }}"
+        satelite_watcher_test_expected_suffix: "{{ '.wav' if satelite_watcher_live_config.sdr.baseband_format == 'w16' else '.' ~ satelite_watcher_live_config.sdr.baseband_format }}"
+        satelite_watcher_test_decode_cfg: "{{ satelite_watcher_live_config.get('decode', {}).get(satelite_watcher_test_decode_config_key, {}) }}"
+        satelite_watcher_test_image_cfg: "{{ satelite_watcher_live_config.get('decode', {}).get('image_after_decode', {}) }}"
+        satelite_watcher_test_decode_output_dir: "{{ (satelite_watcher_live_config.paths.output_base_dir | default(satelite_watcher_live_config.paths.recordings_dir)) }}/{{ satelite_watcher_test_clock.stdout.split('|')[0] }}/{{ satelite_watcher_test_clock.stdout.split('|')[1] }}/test_{{ satelite_watcher_test_clock.stdout.split('|')[2] }}_{{ satelite_watcher_test_satellite_slug }}/{{ (satelite_watcher_live_config.get('decode', {}).get(satelite_watcher_test_decode_config_key, {}).get('output_dir_name', 'decoded')) }}"
+        satelite_watcher_test_images_output_dir: "{{ (satelite_watcher_live_config.paths.output_base_dir | default(satelite_watcher_live_config.paths.recordings_dir)) }}/{{ satelite_watcher_test_clock.stdout.split('|')[0] }}/{{ satelite_watcher_test_clock.stdout.split('|')[1] }}/test_{{ satelite_watcher_test_clock.stdout.split('|')[2] }}_{{ satelite_watcher_test_satellite_slug }}/{{ (satelite_watcher_live_config.get('decode', {}).get('image_after_decode', {}).get('output_dir_name', 'images')) }}"
+        satelite_watcher_test_decode_log_file: "{{ (satelite_watcher_live_config.paths.output_base_dir | default(satelite_watcher_live_config.paths.recordings_dir)) }}/{{ satelite_watcher_test_clock.stdout.split('|')[0] }}/{{ satelite_watcher_test_clock.stdout.split('|')[1] }}/test_{{ satelite_watcher_test_clock.stdout.split('|')[2] }}_{{ satelite_watcher_test_satellite_slug }}/satdump-decode.log"
+        satelite_watcher_test_should_decode: >-
+          {{
+            (satelite_watcher_live_config.get('decode', {}).get(satelite_watcher_test_decode_config_key, {}).get('enabled', false) | bool)
+            and (
+              ((satelite_watcher_live_config.get('decode', {}).get(satelite_watcher_test_decode_config_key, {}).get('target_satellites', [])) | length == 0)
+              or (satelite_watcher_test_satellite.name in (satelite_watcher_live_config.get('decode', {}).get(satelite_watcher_test_decode_config_key, {}).get('target_satellites', [])))
+            )
+          }}
+        satelite_watcher_test_should_collect_images: "{{ satelite_watcher_live_config.get('decode', {}).get('image_after_decode', {}).get('enabled', false) | bool }}"
+
+    - name: Build test tuning parameters
+      ansible.builtin.set_fact:
+        satelite_watcher_test_record_frequency_offset_hz: "{{ satelite_watcher_live_config.sdr.get('record_frequency_offset_hz', 0) | int }}"
+        satelite_watcher_test_tuned_frequency_hz: "{{ (satelite_watcher_test_satellite.frequency_hz | int) + (satelite_watcher_live_config.sdr.get('record_frequency_offset_hz', 0) | int) }}"
+        satelite_watcher_test_decode_freq_shift_hz: "{{ satelite_watcher_test_decode_cfg.get('freq_shift_hz', (satelite_watcher_live_config.sdr.get('record_frequency_offset_hz', 0) | int) * -1) | int }}"
+        satelite_watcher_test_decode_dc_block: "{{ satelite_watcher_test_decode_cfg.get('dc_block', false) | bool }}"
+        satelite_watcher_test_decode_iq_swap: "{{ satelite_watcher_test_decode_cfg.get('iq_swap', false) | bool }}"
+
+    - name: Ensure test recording output directory exists
+      ansible.builtin.file:
+        path: "{{ satelite_watcher_test_output_dir }}"
+        state: directory
+        owner: "{{ satelite_watcher_test_user }}"
+        group: "{{ satelite_watcher_test_group }}"
+        mode: "0755"
+
+    - name: Write test recording metadata stub
+      ansible.builtin.copy:
+        dest: "{{ satelite_watcher_test_output_dir }}/metadata.json"
+        owner: "{{ satelite_watcher_test_user }}"
+        group: "{{ satelite_watcher_test_group }}"
+        mode: "0644"
+        content: |
+          {
+            "kind": "manual_test_recording",
+            "label": "{{ satelite_watcher_test_label }}",
+            "satellite": "{{ satelite_watcher_test_satellite.name }}",
+            "decode_profile": "{{ satelite_watcher_test_decode_profile }}",
+            "frequency_hz": {{ satelite_watcher_test_satellite.frequency_hz }},
+            "record_frequency_offset_hz": {{ satelite_watcher_test_record_frequency_offset_hz }},
+            "tuned_frequency_hz": {{ satelite_watcher_test_tuned_frequency_hz }},
+            "decode_freq_shift_hz": {{ satelite_watcher_test_decode_freq_shift_hz }},
+            "decode_dc_block": {{ satelite_watcher_test_decode_dc_block | to_json }},
+            "decode_iq_swap": {{ satelite_watcher_test_decode_iq_swap | to_json }},
+            "samplerate": {{ satelite_watcher_live_config.sdr.samplerate }},
+            "gain": {{ satelite_watcher_live_config.sdr.gain }},
+            "baseband_format": "{{ satelite_watcher_test_baseband_format }}",
+            "timeout_seconds": {{ satelite_watcher_test_timeout_seconds }},
+            "output_base": "{{ satelite_watcher_test_output_base }}",
+            "expected_output_file": "{{ satelite_watcher_test_output_base }}{{ satelite_watcher_test_expected_suffix }}",
+            "started_from_playbook": "satelite-watcher/test-record.yml"
+          }
+
+    - name: Check whether Plane Watcher is currently running
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/docker
+          - inspect
+          - -f
+          - "{{ '{{.State.Running}}' }}"
+          - plane-watcher
+      register: satelite_watcher_test_plane_watcher_running
+      changed_when: false
+      failed_when: false
+
+    - name: Stop Plane Watcher during test recording
+      community.docker.docker_container:
+        name: plane-watcher
+        state: stopped
+      when: satelite_watcher_test_plane_watcher_running.stdout | default('false') == 'true'
+
+    - name: Run Satelite Watcher test pipeline
+      block:
+        - name: Run 20 second Satelite Watcher test recording
+          become_user: "{{ satelite_watcher_test_user }}"
+          ansible.builtin.command:
+            argv:
+              - "{{ satelite_watcher_live_config.satdump_bin }}"
+              - record
+              - "{{ satelite_watcher_test_output_base }}"
+              - --source
+              - "{{ satelite_watcher_live_config.sdr.source }}"
+              - --samplerate
+              - "{{ satelite_watcher_live_config.sdr.samplerate | string }}"
+              - --frequency
+              - "{{ satelite_watcher_test_tuned_frequency_hz | string }}"
+              - --gain
+              - "{{ satelite_watcher_live_config.sdr.gain | string }}"
+              - --timeout
+              - "{{ satelite_watcher_test_timeout_seconds | string }}"
+              - --baseband_format
+              - "{{ satelite_watcher_test_baseband_format }}"
+          environment:
+            HOME: "{{ satelite_watcher_test_home }}"
+            XDG_CONFIG_HOME: "{{ satelite_watcher_test_xdg_config_home }}"
+          args:
+            chdir: "{{ satelite_watcher_test_home }}"
+          register: satelite_watcher_test_record
+
+        - name: Verify test recording output exists and is non-empty
+          ansible.builtin.stat:
+            path: "{{ satelite_watcher_test_output_base }}{{ satelite_watcher_test_expected_suffix }}"
+          register: satelite_watcher_test_output_stat
+
+        - name: Assert test recording succeeded
+          ansible.builtin.assert:
+            that:
+              - satelite_watcher_test_record.rc == 0
+              - satelite_watcher_test_output_stat.stat.exists
+              - satelite_watcher_test_output_stat.stat.size | int > 0
+            fail_msg: >-
+              Satelite Watcher test recording failed.
+              rc={{ satelite_watcher_test_record.rc }},
+              output={{ satelite_watcher_test_output_base }}{{ satelite_watcher_test_expected_suffix }},
+              size={{ satelite_watcher_test_output_stat.stat.size | default(0) }}
+
+        - name: Run test decode after recording
+          become_user: "{{ satelite_watcher_test_user }}"
+          ansible.builtin.shell: |
+            set -euo pipefail
+            CMD=(
+              {{ satelite_watcher_live_config.satdump_bin | quote }}
+              {{ (satelite_watcher_test_decode_cfg.pipeline | default('meteor_m2-x_lrpt')) | quote }}
+              {{ (satelite_watcher_test_decode_cfg.source_mode | default('baseband')) | quote }}
+              {{ (satelite_watcher_test_output_base ~ satelite_watcher_test_expected_suffix) | quote }}
+              {{ satelite_watcher_test_decode_output_dir | quote }}
+              --samplerate {{ (satelite_watcher_live_config.sdr.samplerate | string) | quote }}
+              --baseband_format {{ satelite_watcher_test_baseband_format | quote }}
+            )
+            if [[ {{ (satelite_watcher_test_decode_freq_shift_hz | string) | quote }} != "0" ]]; then
+              CMD+=(--freq_shift {{ (satelite_watcher_test_decode_freq_shift_hz | string) | quote }})
+            fi
+            {% if satelite_watcher_test_decode_dc_block | bool %}
+            CMD+=(--dc_block)
+            {% endif %}
+            {% if satelite_watcher_test_decode_iq_swap | bool %}
+            CMD+=(--iq_swap)
+            {% endif %}
+            "${CMD[@]}" > >(tee {{ satelite_watcher_test_decode_log_file | quote }}) 2>&1
+          environment:
+            HOME: "{{ satelite_watcher_test_home }}"
+            XDG_CONFIG_HOME: "{{ satelite_watcher_test_xdg_config_home }}"
+          args:
+            chdir: "{{ satelite_watcher_test_home }}"
+            executable: /bin/bash
+          register: satelite_watcher_test_decode
+          when: satelite_watcher_test_should_decode | bool
+
+        - name: Find one decoded test output file
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/find
+              - "{{ satelite_watcher_test_decode_output_dir }}"
+              - -type
+              - f
+              - -print
+              - -quit
+          register: satelite_watcher_test_decode_first_file
+          changed_when: false
+          when: satelite_watcher_test_should_decode | bool
+
+        - name: Assert test decode succeeded
+          ansible.builtin.assert:
+            that:
+              - satelite_watcher_test_decode.rc == 0
+              - (satelite_watcher_test_decode_first_file.stdout | default('') | trim | length) > 0
+            fail_msg: >-
+              Satelite Watcher test decode failed.
+              rc={{ satelite_watcher_test_decode.rc | default('not-run') }},
+              output_dir={{ satelite_watcher_test_decode_output_dir }},
+              first_file={{ satelite_watcher_test_decode_first_file.stdout | default('') }}
+          when: satelite_watcher_test_should_decode | bool
+
+        - name: Collect decoded test images into run images directory
+          become_user: "{{ satelite_watcher_test_user }}"
+          ansible.builtin.shell: |
+            set -euo pipefail
+            mkdir -p {{ satelite_watcher_test_images_output_dir | quote }}
+            find {{ satelite_watcher_test_decode_output_dir | quote }} -type f \( \
+              -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o \
+              -iname '*.bmp' -o -iname '*.tif' -o -iname '*.tiff' \
+            \) -exec cp -n {} {{ satelite_watcher_test_images_output_dir | quote }}/ \;
+            python3 - {{ satelite_watcher_test_images_output_dir | quote }} <<'PY'
+            import json
+            import sys
+            from pathlib import Path
+
+            images_dir = Path(sys.argv[1])
+            image_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+            images = [
+                str(path)
+                for path in sorted(images_dir.iterdir())
+                if path.is_file() and path.suffix.lower() in image_exts
+            ]
+            (images_dir / "manifest.json").write_text(
+                json.dumps({"images": images}, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            PY
+            find {{ satelite_watcher_test_images_output_dir | quote }} -type f ! -name manifest.json -print -quit
+          register: satelite_watcher_test_image_first_file
+          changed_when: true
+          args:
+            executable: /bin/bash
+          when:
+            - satelite_watcher_test_should_decode | bool
+            - satelite_watcher_test_should_collect_images | bool
+
+        - name: Update test recording metadata after pipeline
+          ansible.builtin.copy:
+            dest: "{{ satelite_watcher_test_output_dir }}/metadata.json"
+            owner: "{{ satelite_watcher_test_user }}"
+            group: "{{ satelite_watcher_test_group }}"
+            mode: "0644"
+            content: |
+              {
+                "kind": "manual_test_recording",
+                "label": "{{ satelite_watcher_test_label }}",
+                "satellite": "{{ satelite_watcher_test_satellite.name }}",
+                "decode_profile": "{{ satelite_watcher_test_decode_profile }}",
+                "frequency_hz": {{ satelite_watcher_test_satellite.frequency_hz }},
+                "record_frequency_offset_hz": {{ satelite_watcher_test_record_frequency_offset_hz }},
+                "tuned_frequency_hz": {{ satelite_watcher_test_tuned_frequency_hz }},
+                "decode_freq_shift_hz": {{ satelite_watcher_test_decode_freq_shift_hz }},
+                "decode_dc_block": {{ satelite_watcher_test_decode_dc_block | to_json }},
+                "decode_iq_swap": {{ satelite_watcher_test_decode_iq_swap | to_json }},
+                "samplerate": {{ satelite_watcher_live_config.sdr.samplerate }},
+                "gain": {{ satelite_watcher_live_config.sdr.gain }},
+                "baseband_format": "{{ satelite_watcher_test_baseband_format }}",
+                "timeout_seconds": {{ satelite_watcher_test_timeout_seconds }},
+                "run_dir": "{{ satelite_watcher_test_output_dir }}",
+                "output_base": "{{ satelite_watcher_test_output_base }}",
+                "expected_output_file": "{{ satelite_watcher_test_output_base }}{{ satelite_watcher_test_expected_suffix }}",
+                "output_size_bytes": {{ satelite_watcher_test_output_stat.stat.size | default(0) }},
+                "decode_stage": "{{ 'success' if (satelite_watcher_test_should_decode | bool and (satelite_watcher_test_decode_first_file.stdout | default('') | trim | length) > 0) else ('skipped' if not (satelite_watcher_test_should_decode | bool) else 'failed') }}",
+                "decode_output_dir": "{{ satelite_watcher_test_decode_output_dir if (satelite_watcher_test_should_decode | bool) else '' }}",
+                "decode_log_file": "{{ satelite_watcher_test_decode_log_file if (satelite_watcher_test_should_decode | bool) else '' }}",
+                "image_stage": "{{ 'success' if ((satelite_watcher_test_image_first_file.stdout | default('') | trim | length) > 0) else ('none' if (satelite_watcher_test_should_collect_images | bool) else 'skipped') }}",
+                "images_output_dir": "{{ satelite_watcher_test_images_output_dir if (satelite_watcher_test_should_collect_images | bool) else '' }}",
+                "image_first_file": "{{ satelite_watcher_test_image_first_file.stdout | default('') }}",
+                "started_from_playbook": "satelite-watcher/test-record.yml"
+              }
+
+        - name: Report decoded test image collection result
+          ansible.builtin.debug:
+            msg: >-
+              Satelite Watcher test image collection {{
+                'found ' ~ satelite_watcher_test_image_first_file.stdout
+                if (satelite_watcher_test_image_first_file.stdout | default('') | trim | length) > 0
+                else 'did not find image files; decoded data may still exist without usable image lines'
+              }}
+          when:
+            - satelite_watcher_test_should_decode | bool
+            - satelite_watcher_test_should_collect_images | bool
+
+        - name: Display test recording result
+          ansible.builtin.debug:
+            msg:
+              satellite: "{{ satelite_watcher_test_satellite.name }}"
+              decode_profile: "{{ satelite_watcher_test_decode_profile }}"
+              output_base: "{{ satelite_watcher_test_output_base }}"
+              output_file: "{{ satelite_watcher_test_output_base }}{{ satelite_watcher_test_expected_suffix }}"
+              output_size_bytes: "{{ satelite_watcher_test_output_stat.stat.size }}"
+              decode_enabled: "{{ satelite_watcher_test_should_decode }}"
+              decode_output_dir: "{{ satelite_watcher_test_decode_output_dir if (satelite_watcher_test_should_decode | bool) else 'skipped' }}"
+              decode_first_file: "{{ satelite_watcher_test_decode_first_file.stdout | default('skipped') }}"
+              image_collection_enabled: "{{ satelite_watcher_test_should_collect_images }}"
+              images_output_dir: "{{ satelite_watcher_test_images_output_dir if (satelite_watcher_test_should_collect_images | bool) else 'skipped' }}"
+              image_first_file: "{{ satelite_watcher_test_image_first_file.stdout | default('skipped') }}"
+              frequency_hz: "{{ satelite_watcher_test_satellite.frequency_hz }}"
+              record_frequency_offset_hz: "{{ satelite_watcher_test_record_frequency_offset_hz }}"
+              tuned_frequency_hz: "{{ satelite_watcher_test_tuned_frequency_hz }}"
+              decode_freq_shift_hz: "{{ satelite_watcher_test_decode_freq_shift_hz }}"
+              decode_dc_block: "{{ satelite_watcher_test_decode_dc_block }}"
+              decode_iq_swap: "{{ satelite_watcher_test_decode_iq_swap }}"
+              decode_log_file: "{{ satelite_watcher_test_decode_log_file if (satelite_watcher_test_should_decode | bool) else 'skipped' }}"
+              samplerate: "{{ satelite_watcher_live_config.sdr.samplerate }}"
+              gain: "{{ satelite_watcher_live_config.sdr.gain }}"
+              baseband_format: "{{ satelite_watcher_test_baseband_format }}"
+              timeout_seconds: "{{ satelite_watcher_test_timeout_seconds }}"
+      always:
+        - name: Restart Plane Watcher after test recording
+          community.docker.docker_container:
+            name: plane-watcher
+            state: started
+          when: satelite_watcher_test_plane_watcher_running.stdout | default('false') == 'true'

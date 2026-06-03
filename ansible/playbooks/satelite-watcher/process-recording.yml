@@ -1,0 +1,453 @@
+---
+- name: Process existing Satelite Watcher recording through decode pipeline
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_manual_config_file: /opt/satelite-watcher/config/config.yml
+    satelite_watcher_manual_user: satelite-watcher
+    satelite_watcher_manual_group: satelite-watcher
+    satelite_watcher_manual_home: /opt/satelite-watcher
+    satelite_watcher_manual_xdg_config_home: /opt/satelite-watcher/.config
+    satelite_watcher_manual_raw_file: "{{ raw_file | default('') }}"
+    satelite_watcher_manual_match: "{{ raw_match | default('*.cs16') }}"
+    satelite_watcher_manual_exclude_tests: "{{ exclude_tests | default(true) }}"
+    satelite_watcher_manual_satellite_name: "{{ satellite | default('unknown') }}"
+    satelite_watcher_manual_decode_profile_override: "{{ decode_profile | default('') }}"
+    satelite_watcher_manual_pipeline_override: "{{ satelite_watcher_manual_pipeline | default(pipeline | default('')) }}"
+    satelite_watcher_manual_source_mode_override: "{{ satelite_watcher_manual_source_mode | default(source_mode | default('')) }}"
+    satelite_watcher_manual_decode_suffix_override: "{{ decode_suffix | default('') }}"
+    satelite_watcher_manual_dc_block_override: "{{ dc_block | default('') }}"
+    satelite_watcher_manual_iq_swap_override: "{{ iq_swap | default('') }}"
+    satelite_watcher_manual_freq_shift_override: "{{ freq_shift | default('') }}"
+    satelite_watcher_manual_decode_enabled: true
+    satelite_watcher_manual_collect_images_enabled: true
+
+  tasks:
+    - name: Read deployed Satelite Watcher config
+      ansible.builtin.slurp:
+        src: "{{ satelite_watcher_manual_config_file }}"
+      register: satelite_watcher_manual_config_raw
+
+    - name: Parse deployed Satelite Watcher config
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_config: "{{ satelite_watcher_manual_config_raw.content | b64decode | from_yaml }}"
+
+    - name: Build manual pipeline config
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_output_root: "{{ satelite_watcher_manual_config.paths.output_base_dir | default(satelite_watcher_manual_config.paths.recordings_dir) }}"
+        satelite_watcher_manual_decode_cfg: "{{ satelite_watcher_manual_config.get('decode', {}).get('satelite_watcher_after_record', {}) }}"
+        satelite_watcher_manual_image_cfg: "{{ satelite_watcher_manual_config.get('decode', {}).get('image_after_decode', {}) }}"
+        satelite_watcher_manual_baseband_format: "{{ satelite_watcher_manual_config.sdr.baseband_format }}"
+        satelite_watcher_manual_samplerate: "{{ satelite_watcher_manual_config.sdr.samplerate }}"
+        satelite_watcher_manual_default_pipeline: "{{ satelite_watcher_manual_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('pipeline', 'meteor_m2-x_lrpt') }}"
+        satelite_watcher_manual_default_source_mode: "{{ satelite_watcher_manual_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('source_mode', 'baseband') }}"
+        satelite_watcher_manual_default_freq_shift: "{{ satelite_watcher_manual_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('freq_shift_hz', 0) }}"
+        satelite_watcher_manual_default_dc_block: "{{ satelite_watcher_manual_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('dc_block', false) }}"
+        satelite_watcher_manual_default_iq_swap: "{{ satelite_watcher_manual_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('iq_swap', false) }}"
+        satelite_watcher_manual_decode_dir_name: "{{ satelite_watcher_manual_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('output_dir_name', 'decoded') }}"
+        satelite_watcher_manual_images_dir_name: "{{ satelite_watcher_manual_config.get('decode', {}).get('image_after_decode', {}).get('output_dir_name', 'images') }}"
+
+    - name: Build selected manual decode parameters
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_pipeline_selected: "{{ satelite_watcher_manual_pipeline_override if (satelite_watcher_manual_pipeline_override | trim | length) > 0 else satelite_watcher_manual_default_pipeline }}"
+        satelite_watcher_manual_source_mode_selected: "{{ satelite_watcher_manual_source_mode_override if (satelite_watcher_manual_source_mode_override | trim | length) > 0 else satelite_watcher_manual_default_source_mode }}"
+        satelite_watcher_manual_freq_shift: "{{ satelite_watcher_manual_freq_shift_override if (satelite_watcher_manual_freq_shift_override | string | trim | length) > 0 else satelite_watcher_manual_default_freq_shift }}"
+        satelite_watcher_manual_dc_block: "{{ satelite_watcher_manual_dc_block_override if (satelite_watcher_manual_dc_block_override | string | trim | length) > 0 else satelite_watcher_manual_default_dc_block }}"
+        satelite_watcher_manual_iq_swap: "{{ satelite_watcher_manual_iq_swap_override if (satelite_watcher_manual_iq_swap_override | string | trim | length) > 0 else satelite_watcher_manual_default_iq_swap }}"
+        satelite_watcher_manual_variant_requested: >-
+          {{
+            (satelite_watcher_manual_decode_suffix_override | trim | length) > 0
+            or (satelite_watcher_manual_pipeline_override | trim | length) > 0
+            or (satelite_watcher_manual_source_mode_override | trim | length) > 0
+            or (satelite_watcher_manual_dc_block_override | string | trim | length) > 0
+            or (satelite_watcher_manual_iq_swap_override | string | trim | length) > 0
+            or (satelite_watcher_manual_freq_shift_override | string | trim | length) > 0
+          }}
+
+    - name: Build selected manual output directory names
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_variant_suffix: >-
+          {{
+            (
+              satelite_watcher_manual_decode_suffix_override
+              if (satelite_watcher_manual_decode_suffix_override | trim | length) > 0
+              else (
+                satelite_watcher_manual_pipeline_selected
+                ~ ('_dcblock' if (satelite_watcher_manual_dc_block | bool) else '')
+                ~ ('_iqswap' if (satelite_watcher_manual_iq_swap | bool) else '')
+                ~ (('_shift_' ~ (satelite_watcher_manual_freq_shift | string)) if (satelite_watcher_manual_freq_shift | string | trim | length) > 0 else '')
+              )
+            )
+            | lower
+            | regex_replace('[^a-z0-9]+', '-')
+            | regex_replace('(^-|-$)', '')
+          }}
+
+    - name: Select manual output directory names
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_decode_dir_name_selected: "{{ satelite_watcher_manual_decode_dir_name ~ (('_' ~ satelite_watcher_manual_variant_suffix) if (satelite_watcher_manual_variant_requested | bool) else '') }}"
+        satelite_watcher_manual_images_dir_name_selected: "{{ satelite_watcher_manual_images_dir_name ~ (('_' ~ satelite_watcher_manual_variant_suffix) if (satelite_watcher_manual_variant_requested | bool) else '') }}"
+
+    - name: Find newest matching raw recording when no raw_file is provided
+      ansible.builtin.shell: |
+        set -euo pipefail
+        find {{ satelite_watcher_manual_output_root | quote }} -type f -name {{ satelite_watcher_manual_match | quote }} {% if satelite_watcher_manual_exclude_tests | bool %}! -path '*/test_*/*'{% endif %} -printf '%T@ %p\n' |
+          sort -n |
+          tail -1 |
+          cut -d' ' -f2-
+      args:
+        executable: /bin/bash
+      register: satelite_watcher_manual_found_raw
+      changed_when: false
+      when: (satelite_watcher_manual_raw_file | trim | length) == 0
+
+    - name: Select raw recording
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_selected_raw: >-
+          {{
+            (satelite_watcher_manual_raw_file | trim)
+            if (satelite_watcher_manual_raw_file | trim | length) > 0
+            else (satelite_watcher_manual_found_raw.stdout | default('') | trim)
+          }}
+
+    - name: Infer selected raw satellite
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_selected_satellite_name: >-
+          {%- set raw_name = (satelite_watcher_manual_selected_raw | basename | lower) -%}
+          {%- if 'meteor-m-n2-3' in raw_name -%}
+          METEOR-M N2-3
+          {%- elif 'meteor-m-n2-4' in raw_name -%}
+          METEOR-M N2-4
+          {%- elif 'noaa-15' in raw_name -%}
+          NOAA-15
+          {%- elif 'noaa-18' in raw_name -%}
+          NOAA-18
+          {%- elif 'noaa-19' in raw_name -%}
+          NOAA-19
+          {%- else -%}
+          {{ satelite_watcher_manual_satellite_name }}
+          {%- endif -%}
+
+    - name: Select manual decode profile and config
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_decode_profile_selected: >-
+          {%- if satelite_watcher_manual_decode_profile_override | trim | length > 0 -%}
+          {{ satelite_watcher_manual_decode_profile_override }}
+          {%- elif satelite_watcher_manual_selected_satellite_name is match('^NOAA-') -%}
+          noaa_apt
+          {%- else -%}
+          meteor_lrpt
+          {%- endif -%}
+        satelite_watcher_manual_decode_config_key_selected: >-
+          {{
+            'noaa_apt'
+            if (
+              (satelite_watcher_manual_decode_profile_override | trim | length > 0 and satelite_watcher_manual_decode_profile_override == 'noaa_apt')
+              or (satelite_watcher_manual_decode_profile_override | trim | length == 0 and satelite_watcher_manual_selected_satellite_name is match('^NOAA-'))
+            )
+            else 'satelite_watcher_after_record'
+          }}
+
+    - name: Build selected manual decode profile parameters
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_decode_cfg: "{{ satelite_watcher_manual_config.get('decode', {}).get(satelite_watcher_manual_decode_config_key_selected, {}) }}"
+        satelite_watcher_manual_default_pipeline: "{{ satelite_watcher_manual_config.get('decode', {}).get(satelite_watcher_manual_decode_config_key_selected, {}).get('pipeline', 'meteor_m2-x_lrpt') }}"
+        satelite_watcher_manual_default_source_mode: "{{ satelite_watcher_manual_config.get('decode', {}).get(satelite_watcher_manual_decode_config_key_selected, {}).get('source_mode', 'baseband') }}"
+        satelite_watcher_manual_default_freq_shift: "{{ satelite_watcher_manual_config.get('decode', {}).get(satelite_watcher_manual_decode_config_key_selected, {}).get('freq_shift_hz', 0) }}"
+        satelite_watcher_manual_default_dc_block: "{{ satelite_watcher_manual_config.get('decode', {}).get(satelite_watcher_manual_decode_config_key_selected, {}).get('dc_block', false) }}"
+        satelite_watcher_manual_default_iq_swap: "{{ satelite_watcher_manual_config.get('decode', {}).get(satelite_watcher_manual_decode_config_key_selected, {}).get('iq_swap', false) }}"
+        satelite_watcher_manual_decode_dir_name: "{{ satelite_watcher_manual_config.get('decode', {}).get(satelite_watcher_manual_decode_config_key_selected, {}).get('output_dir_name', 'decoded') }}"
+
+    - name: Rebuild selected manual decode parameters
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_pipeline_selected: "{{ satelite_watcher_manual_pipeline_override if (satelite_watcher_manual_pipeline_override | trim | length) > 0 else satelite_watcher_manual_default_pipeline }}"
+        satelite_watcher_manual_source_mode_selected: "{{ satelite_watcher_manual_source_mode_override if (satelite_watcher_manual_source_mode_override | trim | length) > 0 else satelite_watcher_manual_default_source_mode }}"
+        satelite_watcher_manual_freq_shift: "{{ satelite_watcher_manual_freq_shift_override if (satelite_watcher_manual_freq_shift_override | string | trim | length) > 0 else satelite_watcher_manual_default_freq_shift }}"
+        satelite_watcher_manual_dc_block: "{{ satelite_watcher_manual_dc_block_override if (satelite_watcher_manual_dc_block_override | string | trim | length) > 0 else satelite_watcher_manual_default_dc_block }}"
+        satelite_watcher_manual_iq_swap: "{{ satelite_watcher_manual_iq_swap_override if (satelite_watcher_manual_iq_swap_override | string | trim | length) > 0 else satelite_watcher_manual_default_iq_swap }}"
+        satelite_watcher_manual_variant_requested: >-
+          {{
+            (satelite_watcher_manual_decode_suffix_override | trim | length) > 0
+            or (satelite_watcher_manual_pipeline_override | trim | length) > 0
+            or (satelite_watcher_manual_source_mode_override | trim | length) > 0
+            or (satelite_watcher_manual_dc_block_override | string | trim | length) > 0
+            or (satelite_watcher_manual_iq_swap_override | string | trim | length) > 0
+            or (satelite_watcher_manual_freq_shift_override | string | trim | length) > 0
+          }}
+
+    - name: Rebuild selected manual output directory names
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_variant_suffix: >-
+          {{
+            (
+              satelite_watcher_manual_decode_suffix_override
+              if (satelite_watcher_manual_decode_suffix_override | trim | length) > 0
+              else (
+                satelite_watcher_manual_pipeline_selected
+                ~ ('_dcblock' if (satelite_watcher_manual_dc_block | bool) else '')
+                ~ ('_iqswap' if (satelite_watcher_manual_iq_swap | bool) else '')
+                ~ (('_shift_' ~ (satelite_watcher_manual_freq_shift | string)) if (satelite_watcher_manual_freq_shift | string | trim | length) > 0 else '')
+              )
+            )
+            | lower
+            | regex_replace('[^a-z0-9]+', '-')
+            | regex_replace('(^-|-$)', '')
+          }}
+
+    - name: Re-select manual output directory names
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_decode_dir_name_selected: "{{ satelite_watcher_manual_decode_dir_name ~ (('_' ~ satelite_watcher_manual_variant_suffix) if (satelite_watcher_manual_variant_requested | bool) else '') }}"
+        satelite_watcher_manual_images_dir_name_selected: "{{ satelite_watcher_manual_images_dir_name ~ (('_' ~ satelite_watcher_manual_variant_suffix) if (satelite_watcher_manual_variant_requested | bool) else '') }}"
+
+    - name: Show selected raw recording
+      ansible.builtin.debug:
+        msg:
+          selected_raw: "{{ satelite_watcher_manual_selected_raw | default('') }}"
+          satellite: "{{ satelite_watcher_manual_selected_satellite_name }}"
+          decode_profile: "{{ satelite_watcher_manual_decode_profile_selected }}"
+          raw_match: "{{ satelite_watcher_manual_match }}"
+          exclude_tests: "{{ satelite_watcher_manual_exclude_tests }}"
+          pipeline: "{{ satelite_watcher_manual_pipeline_selected }}"
+          source_mode: "{{ satelite_watcher_manual_source_mode_selected }}"
+          dc_block: "{{ satelite_watcher_manual_dc_block }}"
+          iq_swap: "{{ satelite_watcher_manual_iq_swap }}"
+          freq_shift: "{{ satelite_watcher_manual_freq_shift if (satelite_watcher_manual_freq_shift | string | trim | length) > 0 else 'none' }}"
+
+    - name: Verify selected raw recording exists
+      ansible.builtin.stat:
+        path: "{{ satelite_watcher_manual_selected_raw }}"
+      register: satelite_watcher_manual_raw_stat
+
+    - name: Assert selected raw recording is usable
+      ansible.builtin.assert:
+        that:
+          - satelite_watcher_manual_selected_raw | length > 0
+          - satelite_watcher_manual_raw_stat.stat.exists
+          - satelite_watcher_manual_raw_stat.stat.size | int > 0
+        fail_msg: >-
+          No raw recording was found. Pass an exact file with
+          -e 'raw_file=/path/to/file.cs16' or search with
+          -e 'raw_match=*1776608400*.cs16'. By default this play looks for
+          real Satelite watcher .cs16 captures and ignores test-record outputs.
+
+    - name: Read raw recording timestamp
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/date
+          - -r
+          - "{{ satelite_watcher_manual_selected_raw }}"
+          - "+%B %Y|%Y-%m-%d|%Y%m%dT%H%M%S|%z"
+      register: satelite_watcher_manual_clock
+      changed_when: false
+
+    - name: Build manual run paths
+      ansible.builtin.set_fact:
+        satelite_watcher_manual_month_bucket: "{{ satelite_watcher_manual_clock.stdout.split('|')[0] }}"
+        satelite_watcher_manual_date_bucket: "{{ satelite_watcher_manual_clock.stdout.split('|')[1] }}"
+        satelite_watcher_manual_timestamp: "{{ satelite_watcher_manual_clock.stdout.split('|')[2] }}"
+        satelite_watcher_manual_tz_offset: "{{ satelite_watcher_manual_clock.stdout.split('|')[3] }}"
+        satelite_watcher_manual_raw_basename: "{{ satelite_watcher_manual_selected_raw | basename }}"
+        satelite_watcher_manual_stem: "{{ (satelite_watcher_manual_selected_raw | basename) | regex_replace('\\.[^.]+$', '') }}"
+        satelite_watcher_manual_run_dir: "{{ satelite_watcher_manual_output_root }}/{{ satelite_watcher_manual_clock.stdout.split('|')[0] }}/{{ satelite_watcher_manual_clock.stdout.split('|')[1] }}/{{ (satelite_watcher_manual_selected_raw | basename) | regex_replace('\\.[^.]+$', '') }}"
+        satelite_watcher_manual_run_raw: "{{ satelite_watcher_manual_output_root }}/{{ satelite_watcher_manual_clock.stdout.split('|')[0] }}/{{ satelite_watcher_manual_clock.stdout.split('|')[1] }}/{{ (satelite_watcher_manual_selected_raw | basename) | regex_replace('\\.[^.]+$', '') }}/{{ satelite_watcher_manual_selected_raw | basename }}"
+        satelite_watcher_manual_decode_output_dir: "{{ satelite_watcher_manual_output_root }}/{{ satelite_watcher_manual_clock.stdout.split('|')[0] }}/{{ satelite_watcher_manual_clock.stdout.split('|')[1] }}/{{ (satelite_watcher_manual_selected_raw | basename) | regex_replace('\\.[^.]+$', '') }}/{{ satelite_watcher_manual_decode_dir_name_selected }}"
+        satelite_watcher_manual_images_output_dir: "{{ satelite_watcher_manual_output_root }}/{{ satelite_watcher_manual_clock.stdout.split('|')[0] }}/{{ satelite_watcher_manual_clock.stdout.split('|')[1] }}/{{ (satelite_watcher_manual_selected_raw | basename) | regex_replace('\\.[^.]+$', '') }}/{{ satelite_watcher_manual_images_dir_name_selected }}"
+        satelite_watcher_manual_metadata_file: "{{ satelite_watcher_manual_output_root }}/{{ satelite_watcher_manual_clock.stdout.split('|')[0] }}/{{ satelite_watcher_manual_clock.stdout.split('|')[1] }}/{{ (satelite_watcher_manual_selected_raw | basename) | regex_replace('\\.[^.]+$', '') }}/metadata.json"
+        satelite_watcher_manual_decode_log_file: "{{ satelite_watcher_manual_output_root }}/{{ satelite_watcher_manual_clock.stdout.split('|')[0] }}/{{ satelite_watcher_manual_clock.stdout.split('|')[1] }}/{{ (satelite_watcher_manual_selected_raw | basename) | regex_replace('\\.[^.]+$', '') }}/satdump-decode{{ ('_' ~ satelite_watcher_manual_variant_suffix) if (satelite_watcher_manual_variant_requested | bool) else '' }}.log"
+
+    - name: Ensure manual run output directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ satelite_watcher_manual_user }}"
+        group: "{{ satelite_watcher_manual_group }}"
+        mode: "0755"
+      loop:
+        - "{{ satelite_watcher_manual_run_dir }}"
+        - "{{ satelite_watcher_manual_decode_output_dir }}"
+        - "{{ satelite_watcher_manual_images_output_dir }}"
+
+    - name: Link raw recording into manual run folder
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ {{ satelite_watcher_manual_selected_raw | quote }} != {{ satelite_watcher_manual_run_raw | quote }} ] && [ ! -e {{ satelite_watcher_manual_run_raw | quote }} ]; then
+          ln {{ satelite_watcher_manual_selected_raw | quote }} {{ satelite_watcher_manual_run_raw | quote }} 2>/dev/null ||
+            ln -s {{ satelite_watcher_manual_selected_raw | quote }} {{ satelite_watcher_manual_run_raw | quote }}
+        fi
+        chmod a+r {{ satelite_watcher_manual_run_raw | quote }} 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Write manual pipeline metadata stub
+      ansible.builtin.copy:
+        dest: "{{ satelite_watcher_manual_metadata_file }}"
+        owner: "{{ satelite_watcher_manual_user }}"
+        group: "{{ satelite_watcher_manual_group }}"
+        mode: "0644"
+        content: |
+          {
+            "kind": "manual_pipeline",
+            "satellite": {{ satelite_watcher_manual_selected_satellite_name | to_json }},
+            "decode_profile": {{ satelite_watcher_manual_decode_profile_selected | to_json }},
+            "raw_source": {{ satelite_watcher_manual_selected_raw | to_json }},
+            "raw_file": {{ satelite_watcher_manual_run_raw | to_json }},
+            "run_dir": {{ satelite_watcher_manual_run_dir | to_json }},
+            "decode_output_dir": {{ satelite_watcher_manual_decode_output_dir | to_json }},
+            "decode_log_file": {{ satelite_watcher_manual_decode_log_file | to_json }},
+            "images_output_dir": {{ satelite_watcher_manual_images_output_dir | to_json }},
+            "pipeline": {{ satelite_watcher_manual_pipeline_selected | to_json }},
+            "source_mode": {{ satelite_watcher_manual_source_mode_selected | to_json }},
+            "dc_block": {{ satelite_watcher_manual_dc_block | bool | to_json }},
+            "iq_swap": {{ satelite_watcher_manual_iq_swap | bool | to_json }},
+            "freq_shift": {{ (satelite_watcher_manual_freq_shift | string) | to_json }},
+            "samplerate": {{ satelite_watcher_manual_samplerate }},
+            "baseband_format": {{ satelite_watcher_manual_baseband_format | to_json }},
+            "started_from_playbook": "satelite-watcher/process-recording.yml"
+          }
+
+    - name: Run manual decode pipeline
+      become_user: "{{ satelite_watcher_manual_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        CMD=(
+          {{ satelite_watcher_manual_config.satdump_bin | quote }}
+          {{ satelite_watcher_manual_pipeline_selected | quote }}
+          {{ satelite_watcher_manual_source_mode_selected | quote }}
+          {{ satelite_watcher_manual_run_raw | quote }}
+          {{ satelite_watcher_manual_decode_output_dir | quote }}
+          --samplerate {{ (satelite_watcher_manual_samplerate | string) | quote }}
+          --baseband_format {{ satelite_watcher_manual_baseband_format | quote }}
+        )
+        {% if satelite_watcher_manual_dc_block | bool %}
+        CMD+=(--dc_block)
+        {% endif %}
+        {% if satelite_watcher_manual_iq_swap | bool %}
+        CMD+=(--iq_swap)
+        {% endif %}
+        {% if satelite_watcher_manual_freq_shift | string | trim | length > 0 %}
+        CMD+=(--freq_shift {{ (satelite_watcher_manual_freq_shift | string) | quote }})
+        {% endif %}
+        "${CMD[@]}" > >(tee {{ satelite_watcher_manual_decode_log_file | quote }}) 2>&1
+      environment:
+        HOME: "{{ satelite_watcher_manual_home }}"
+        XDG_CONFIG_HOME: "{{ satelite_watcher_manual_xdg_config_home }}"
+      args:
+        chdir: "{{ satelite_watcher_manual_home }}"
+        executable: /bin/bash
+      register: satelite_watcher_manual_decode
+      when: satelite_watcher_manual_decode_enabled | bool
+
+    - name: Find one decoded output file
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/find
+          - "{{ satelite_watcher_manual_decode_output_dir }}"
+          - -type
+          - f
+          - -print
+          - -quit
+      register: satelite_watcher_manual_decode_first_file
+      changed_when: false
+      when: satelite_watcher_manual_decode_enabled | bool
+
+    - name: Assert manual decode produced output
+      ansible.builtin.assert:
+        that:
+          - satelite_watcher_manual_decode.rc == 0
+          - (satelite_watcher_manual_decode_first_file.stdout | default('') | trim | length) > 0
+        fail_msg: >-
+          Manual Satelite Watcher decode did not produce output.
+          rc={{ satelite_watcher_manual_decode.rc | default('not-run') }},
+          decode_dir={{ satelite_watcher_manual_decode_output_dir }}
+      when: satelite_watcher_manual_decode_enabled | bool
+
+    - name: Collect decoded manual images into run images directory
+      become_user: "{{ satelite_watcher_manual_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p {{ satelite_watcher_manual_images_output_dir | quote }}
+        find {{ satelite_watcher_manual_decode_output_dir | quote }} -type f \( \
+          -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o \
+          -iname '*.bmp' -o -iname '*.tif' -o -iname '*.tiff' \
+        \) -exec cp -n {} {{ satelite_watcher_manual_images_output_dir | quote }}/ \;
+        python3 - {{ satelite_watcher_manual_images_output_dir | quote }} <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        images_dir = Path(sys.argv[1])
+        image_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+        images = [
+            str(path)
+            for path in sorted(images_dir.iterdir())
+            if path.is_file() and path.suffix.lower() in image_exts
+        ]
+        (images_dir / "manifest.json").write_text(
+            json.dumps({"images": images}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        PY
+        find {{ satelite_watcher_manual_images_output_dir | quote }} -type f ! -name manifest.json -print -quit || true
+      args:
+        executable: /bin/bash
+      register: satelite_watcher_manual_image_first_file
+      changed_when: true
+      when:
+        - satelite_watcher_manual_decode_enabled | bool
+        - satelite_watcher_manual_collect_images_enabled | bool
+
+    - name: Update manual pipeline metadata after decode
+      ansible.builtin.copy:
+        dest: "{{ satelite_watcher_manual_metadata_file }}"
+        owner: "{{ satelite_watcher_manual_user }}"
+        group: "{{ satelite_watcher_manual_group }}"
+        mode: "0644"
+        content: |
+          {
+            "kind": "manual_pipeline",
+            "satellite": {{ satelite_watcher_manual_selected_satellite_name | to_json }},
+            "decode_profile": {{ satelite_watcher_manual_decode_profile_selected | to_json }},
+            "raw_source": {{ satelite_watcher_manual_selected_raw | to_json }},
+            "raw_file": {{ satelite_watcher_manual_run_raw | to_json }},
+            "raw_size_bytes": {{ satelite_watcher_manual_raw_stat.stat.size | default(0) }},
+            "run_dir": {{ satelite_watcher_manual_run_dir | to_json }},
+            "decode_stage": "{{ 'success' if (satelite_watcher_manual_decode_enabled | bool and (satelite_watcher_manual_decode_first_file.stdout | default('') | trim | length) > 0) else ('skipped' if not (satelite_watcher_manual_decode_enabled | bool) else 'failed') }}",
+            "decode_output_dir": {{ satelite_watcher_manual_decode_output_dir | to_json }},
+            "decode_log_file": {{ satelite_watcher_manual_decode_log_file | to_json }},
+            "decode_first_file": {{ satelite_watcher_manual_decode_first_file.stdout | default('') | to_json }},
+            "image_stage": "{{ 'success' if ((satelite_watcher_manual_image_first_file.stdout | default('') | trim | length) > 0) else ('none' if (satelite_watcher_manual_collect_images_enabled | bool) else 'skipped') }}",
+            "images_output_dir": {{ satelite_watcher_manual_images_output_dir | to_json }},
+            "image_first_file": {{ satelite_watcher_manual_image_first_file.stdout | default('') | to_json }},
+            "pipeline": {{ satelite_watcher_manual_pipeline_selected | to_json }},
+            "source_mode": {{ satelite_watcher_manual_source_mode_selected | to_json }},
+            "dc_block": {{ satelite_watcher_manual_dc_block | bool | to_json }},
+            "iq_swap": {{ satelite_watcher_manual_iq_swap | bool | to_json }},
+            "freq_shift": {{ (satelite_watcher_manual_freq_shift | string) | to_json }},
+            "samplerate": {{ satelite_watcher_manual_samplerate }},
+            "baseband_format": {{ satelite_watcher_manual_baseband_format | to_json }},
+            "started_from_playbook": "satelite-watcher/process-recording.yml"
+          }
+
+    - name: Display manual pipeline result
+      ansible.builtin.debug:
+        msg:
+          raw_source: "{{ satelite_watcher_manual_selected_raw }}"
+          satellite: "{{ satelite_watcher_manual_selected_satellite_name }}"
+          decode_profile: "{{ satelite_watcher_manual_decode_profile_selected }}"
+          pipeline: "{{ satelite_watcher_manual_pipeline_selected }}"
+          source_mode: "{{ satelite_watcher_manual_source_mode_selected }}"
+          dc_block: "{{ satelite_watcher_manual_dc_block }}"
+          iq_swap: "{{ satelite_watcher_manual_iq_swap }}"
+          freq_shift: "{{ satelite_watcher_manual_freq_shift if (satelite_watcher_manual_freq_shift | string | trim | length) > 0 else 'none' }}"
+          run_folder: "{{ satelite_watcher_manual_run_dir }}"
+          raw_file: "{{ satelite_watcher_manual_run_raw }}"
+          decoded: "{{ satelite_watcher_manual_decode_output_dir }}"
+          decode_first_file: "{{ satelite_watcher_manual_decode_first_file.stdout | default('skipped') }}"
+          decode_log_file: "{{ satelite_watcher_manual_decode_log_file }}"
+          images: "{{ satelite_watcher_manual_images_output_dir }}"
+          image_first_file: "{{ satelite_watcher_manual_image_first_file.stdout | default('none') }}"
+          image_note: "{{ 'SatDump did not emit image files for this capture' if ((satelite_watcher_manual_image_first_file.stdout | default('') | trim | length) == 0) else 'image file collected' }}"
+          metadata: "{{ satelite_watcher_manual_metadata_file }}"

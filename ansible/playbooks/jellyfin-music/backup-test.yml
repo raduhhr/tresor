@@ -1,13 +1,14 @@
 ---
 # playbooks/jellyfin-music/backup-test.yml
-# Full backup/restore lifecycle test for Jellyfin Music.
-# Fingerprints library.db to prove user data & music library metadata survive.
+# Full backup/restore lifecycle test for Jellyfin Media.
+# Fingerprints library.db and user data while allowing rebuildable cache/metadata
+# paths to be excluded from the backup set.
 #
 # Usage:
 #   ansible-playbook playbooks/jellyfin-music/backup-test.yml
 #   ansible-playbook playbooks/jellyfin-music/backup-test.yml -e confirm_test=yes
 
-- name: "Backup Test — Phase 1: Fresh backup"
+- name: "Jellyfin Media Backup Test - Phase 1: Fresh backup"
   hosts: tresor
   become: true
   gather_facts: false
@@ -17,16 +18,26 @@
     data_dir: "/mnt/ssd/configs/jellyfin-music"
     container_name: "jellyfin-music"
     confirm_test: "no"
+    backup_excludes:
+      - "jellyfin-music/cache"
+      - "jellyfin-music/log"
+      - "jellyfin-music/metadata"
+      - "jellyfin-music/transcodes"
+      - "jellyfin-music/migration.xml"
+      - "jellyfin-music/config/migration.xml"
+      - "jellyfin-music/data/metadata"
+      - "jellyfin-music/data/transcodes"
+      - "jellyfin-music/root/default/metadata"
+      - "jellyfin-music/root/default/transcodes"
 
   tasks:
-
     - name: Ensure backup directory exists
       ansible.builtin.file:
         path: "{{ backup_dir }}"
         state: directory
         owner: root
         group: root
-        mode: '0755'
+        mode: "0755"
 
     - name: Check if container is running
       community.docker.docker_container_info:
@@ -46,7 +57,11 @@
         set -eu
         DATE=$(date +%d%m%Y-%H%M)
         SNAPSHOT="{{ backup_dir }}/jellyfin-music-backup-$DATE.tar.gz"
-        tar -czf "$SNAPSHOT" -C /mnt/ssd/configs jellyfin-music
+        tar \
+        {% for item in backup_excludes %}
+          --exclude='{{ item }}' \
+        {% endfor %}
+          -czf "$SNAPSHOT" -C /mnt/ssd/configs jellyfin-music
         echo "$SNAPSHOT"
       register: _fresh_backup
 
@@ -60,7 +75,7 @@
         msg: "Backup only {{ (_backup_stat.stat.size / 1048576) | round(2) }} MB."
       when: _backup_stat.stat.size < 10240
 
-- name: "Backup Test — Phase 2: Fingerprint"
+- name: "Jellyfin Media Backup Test - Phase 2: Fingerprint"
   hosts: tresor
   become: true
   gather_facts: false
@@ -69,7 +84,6 @@
     data_dir: "/mnt/ssd/configs/jellyfin-music"
 
   tasks:
-
     - name: Count files
       ansible.builtin.shell: find {{ data_dir }} -type f | wc -l
       register: _file_count_before
@@ -118,7 +132,7 @@
           library_db_hash: "{{ pre_db_hash }}"
           user_data_hash: "{{ pre_user_hash }}"
 
-- name: "Backup Test — Phase 3: Confirm"
+- name: "Jellyfin Media Backup Test - Phase 3: Confirm"
   hosts: tresor
   become: true
   gather_facts: false
@@ -128,11 +142,10 @@
     confirm_test: "no"
 
   tasks:
-
-    - name: "⚠️  BACKUP TEST CONFIRMATION"
+    - name: Confirm backup test
       ansible.builtin.pause:
         prompt: |
-          JELLYFIN-MUSIC BACKUP/RESTORE TEST
+          JELLYFIN MEDIA BACKUP/RESTORE TEST
           Backup:       {{ test_backup_file | basename }}
           Library hash: {{ pre_db_hash }}
           User hash:    {{ pre_user_hash }}
@@ -147,7 +160,7 @@
         - confirm_test | lower != 'yes'
         - _confirm.user_input | default('') | lower != 'yes'
 
-- name: "Backup Test — Phase 4: Teardown"
+- name: "Jellyfin Media Backup Test - Phase 4: Teardown"
   hosts: tresor
   become: true
   gather_facts: false
@@ -157,7 +170,6 @@
     container_name: "jellyfin-music"
 
   tasks:
-
     - name: Stop container
       community.docker.docker_container:
         name: "{{ container_name }}"
@@ -186,7 +198,7 @@
       ansible.builtin.assert:
         that: not _wiped.stat.exists
 
-- name: "Backup Test — Phase 5: Restore"
+- name: "Jellyfin Media Backup Test - Phase 5: Restore"
   hosts: tresor
   become: true
   gather_facts: false
@@ -195,12 +207,11 @@
     data_dir: "/mnt/ssd/configs/jellyfin-music"
 
   tasks:
-
     - name: Ensure parent dir
       ansible.builtin.file:
         path: /mnt/ssd/configs
         state: directory
-        mode: '0755'
+        mode: "0755"
 
     - name: Extract backup
       ansible.builtin.shell: |
@@ -224,10 +235,10 @@
         group: "1000"
         recurse: true
 
-- name: "Backup Test — Phase 6: Redeploy"
+- name: "Jellyfin Media Backup Test - Phase 6: Redeploy"
   import_playbook: deploy.yml
 
-- name: "Backup Test — Phase 7: Verify"
+- name: "Jellyfin Media Backup Test - Phase 7: Verify"
   hosts: tresor
   become: true
   gather_facts: false
@@ -237,7 +248,6 @@
     container_name: "jellyfin-music"
 
   tasks:
-
     - name: Count files after
       ansible.builtin.shell: find {{ data_dir }} -type f | wc -l
       register: _file_count_after
@@ -267,24 +277,24 @@
     - name: Compare fingerprints
       ansible.builtin.debug:
         msg:
-          metric:      ["Before", "After", "Match"]
-          file_count:  ["{{ pre_file_count }}", "{{ _file_count_after.stdout | trim }}", "{{ pre_file_count == _file_count_after.stdout | trim }}"]
-          library_db:  ["{{ pre_db_hash }}", "{{ _db_hash_after.stdout | trim }}", "{{ pre_db_hash == _db_hash_after.stdout | trim }}"]
-          user_data:   ["{{ pre_user_hash }}", "{{ _user_hash_after.stdout | trim }}", "{{ pre_user_hash == _user_hash_after.stdout | trim }}"]
+          metric: ["Before", "After", "Match"]
+          file_count: ["{{ pre_file_count }}", "{{ _file_count_after.stdout | trim }}", "{{ pre_file_count == _file_count_after.stdout | trim }}"]
+          library_db: ["{{ pre_db_hash }}", "{{ _db_hash_after.stdout | trim }}", "{{ pre_db_hash == _db_hash_after.stdout | trim }}"]
+          user_data: ["{{ pre_user_hash }}", "{{ _user_hash_after.stdout | trim }}", "{{ pre_user_hash == _user_hash_after.stdout | trim }}"]
 
     - name: Assert library DB integrity
       ansible.builtin.assert:
         that:
           - pre_db_hash == _db_hash_after.stdout | trim
-        success_msg: "✅ library.db hash matches — music library & users intact!"
-        fail_msg: "❌ library.db MISMATCH! Before: {{ pre_db_hash }} After: {{ _db_hash_after.stdout | trim }}"
+        success_msg: "library.db hash matches - media library and users intact."
+        fail_msg: "library.db mismatch. Before: {{ pre_db_hash }} After: {{ _db_hash_after.stdout | trim }}"
 
     - name: Assert user data integrity
       ansible.builtin.assert:
         that:
           - pre_user_hash == _user_hash_after.stdout | trim
-        success_msg: "✅ User data hash matches!"
-        fail_msg: "❌ User data MISMATCH!"
+        success_msg: "User data hash matches."
+        fail_msg: "User data mismatch."
 
     - name: Verify container running
       community.docker.docker_container_info:
@@ -297,14 +307,11 @@
           - _final.exists
           - _final.container.State.Running
 
-    - name: "🎉 BACKUP TEST PASSED"
+    - name: Show backup test summary
       ansible.builtin.debug:
         msg:
-          - "════════════════════════════════════════════════"
-          - "  JELLYFIN-MUSIC BACKUP/RESTORE TEST: PASSED"
-          - "════════════════════════════════════════════════"
-          - "  Library DB:   ✅ {{ pre_db_hash }}"
-          - "  User data:    ✅ {{ pre_user_hash }}"
-          - "  Files:        {{ pre_file_count }} → {{ _file_count_after.stdout | trim }}"
-          - "  Container:    ✅ running"
-          - "════════════════════════════════════════════════"
+          - "JELLYFIN MEDIA BACKUP/RESTORE TEST: PASSED"
+          - "Library DB: {{ pre_db_hash }}"
+          - "User data: {{ pre_user_hash }}"
+          - "Files: {{ pre_file_count }} -> {{ _file_count_after.stdout | trim }}"
+          - "Container: running"

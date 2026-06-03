@@ -1,0 +1,31 @@
+---
+- name: Paper Discord join notifier status
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check service state
+      ansible.builtin.command: systemctl is-active paper-join-notifier
+      register: _active
+      changed_when: false
+      failed_when: false
+
+    - name: Check service enabled state
+      ansible.builtin.command: systemctl is-enabled paper-join-notifier
+      register: _enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Read recent service logs
+      ansible.builtin.command: journalctl -u paper-join-notifier -n 20 --no-pager
+      register: _journal
+      changed_when: false
+      failed_when: false
+
+    - name: Show status summary
+      ansible.builtin.debug:
+        msg:
+          active: "{{ _active.stdout | default('unknown') }}"
+          enabled: "{{ _enabled.stdout | default('unknown') }}"
+          recent_logs: "{{ _journal.stdout_lines | default([]) }}"

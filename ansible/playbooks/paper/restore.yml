@@ -36,7 +36,8 @@
 
   vars:
     backup_dir: "/mnt/data/files/Backups/paper"
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
     paper_container: "paper"
     confirm_restore: "no"
 
@@ -87,10 +88,10 @@
     - name: Fail if tarball structure looks wrong
       ansible.builtin.fail:
         msg: >
-          Backup tarball doesn't contain expected paper/ directory structure.
+          Backup tarball doesn't contain expected {{ paper_data_leaf }}/ directory structure.
           First entries: {{ _tar_list.stdout_lines[:5] }}
       when: >
-        _tar_list.stdout_lines | select('match', '^paper/') | list | length == 0
+        _tar_list.stdout_lines | select('match', '^' ~ paper_data_leaf ~ '/') | list | length == 0
 
     - name: Show tarball contents preview
       ansible.builtin.debug:
@@ -143,7 +144,8 @@
 
   vars:
     backup_dir: "/mnt/data/files/Backups/paper"
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
     paper_container: "paper"
 
   tasks:
@@ -157,7 +159,7 @@
       ansible.builtin.shell: |
         DATE=$(date +%d%m%Y-%H%M)
         tar -czf "{{ backup_dir }}/pre-restore-paper-backup-$DATE.tar.gz" \
-          -C /mnt/ssd/services paper
+          -C "{{ paper_data_parent }}" "{{ paper_data_leaf }}"
         echo "{{ backup_dir }}/pre-restore-paper-backup-$DATE.tar.gz"
       register: _safety_snap
       when: _data_dir.stat.exists | default(false)
@@ -206,7 +208,8 @@
   gather_facts: false
 
   vars:
-    paper_data_dir: "/mnt/ssd/services/paper"
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
     paper_uid: 1000
     paper_gid: 1000
 
@@ -214,13 +217,13 @@
 
     - name: Recreate parent directory
       ansible.builtin.file:
-        path: /mnt/ssd/services
+        path: "{{ paper_data_parent }}"
         state: directory
         mode: '0755'
 
     - name: Extract backup tarball
       ansible.builtin.shell: |
-        tar -xzf "{{ _restore_file }}" -C /mnt/ssd/services
+        tar -xzf "{{ _restore_file }}" -C "{{ paper_data_parent }}"
       register: _extract
 
     - name: Verify paper directory was restored

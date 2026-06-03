@@ -1,0 +1,17 @@
+---
+# Runs all available R2 restore playbooks in sequence.
+
+- import_playbook: ../bday-notifier/restore-r2.yml
+- import_playbook: ../cloudflared/restore-r2.yml
+- import_playbook: ../content-notifier/restore-r2.yml
+- import_playbook: ../filebrowser/restore-r2.yml
+- import_playbook: ../filebrowser-public/restore-r2.yml
+- import_playbook: ../grafana/restore-r2.yml
+- import_playbook: ../jellyfin/restore-r2.yml
+- import_playbook: ../jellyfin-music/restore-r2.yml
+- import_playbook: ../kiwix/restore-r2.yml
+- import_playbook: ../satelite-watcher/restore-r2.yml
+- import_playbook: ../paper/restore-r2.yml
+- import_playbook: ../steam-free-notifier/restore-r2.yml
+- import_playbook: ../traefik/restore-r2.yml
+- import_playbook: ../uptime-kuma/restore-r2.yml

@@ -1,0 +1,67 @@
+---
+# Best-effort service restart orchestration.
+#
+# A single flaky health check should not prevent the remaining services from
+# being restarted during recovery after a power/network event. Each service keeps
+# its own dedicated restart playbook; this wrapper runs all of them and reports
+# any failures at the end.
+
+- name: Restart all services best-effort
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    tresor_restart_all_fail_on_error: false
+    tresor_restart_all_services:
+      - bday-notifier
+      - cloudflared
+      - content-notifier
+      - filebrowser
+      - filebrowser-public
+      - grafana
+      - jellyfin
+      - jellyfin-music
+      - kiwix
+      - satelite-watcher
+      - paper
+      - paper-join-notifier
+      - plane-watcher
+      - prometheus
+      - steam-free-notifier
+      - traefik
+      - tresor-index
+      - uptime-kuma
+  tasks:
+    - name: Run service restart playbook
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - inventory/hosts.ini
+          - "playbooks/{{ item }}/restart.yml"
+        chdir: "{{ playbook_dir }}/../.."
+      loop: "{{ tresor_restart_all_services }}"
+      loop_control:
+        label: "{{ item }}"
+      register: _restart_results
+      changed_when: false
+      failed_when: false
+
+    - name: Build restart summary
+      ansible.builtin.set_fact:
+        _restart_failed: "{{ _restart_results.results | selectattr('rc', 'ne', 0) | list }}"
+        _restart_ok: "{{ _restart_results.results | selectattr('rc', 'eq', 0) | list }}"
+
+    - name: Show restart summary
+      ansible.builtin.debug:
+        msg:
+          ok: "{{ _restart_ok | map(attribute='item') | list }}"
+          failed: "{{ _restart_failed | map(attribute='item') | list }}"
+          note: "Failures are reported here but do not stop the recovery run unless tresor_restart_all_fail_on_error=true."
+
+    - name: Fail when strict restart-all mode is requested
+      ansible.builtin.fail:
+        msg: "Some restart playbooks failed: {{ _restart_failed | map(attribute='item') | list }}"
+      when:
+        - tresor_restart_all_fail_on_error | bool
+        - _restart_failed | length > 0

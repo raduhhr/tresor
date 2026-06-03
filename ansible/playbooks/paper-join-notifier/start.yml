@@ -1,0 +1,12 @@
+---
+- name: Start Paper Discord join notifier
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Start service
+      ansible.builtin.systemd:
+        name: paper-join-notifier
+        state: started
+        enabled: true

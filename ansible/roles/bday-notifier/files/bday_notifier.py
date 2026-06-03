@@ -47,7 +47,7 @@ def post_discord(url: str, msg: str):
 def main():
     cfg = load_cfg()
 
-    tz_name = cfg.get("timezone", "UTC")
+    tz_name = cfg.get("timezone", "Europe/Bucharest")
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
 

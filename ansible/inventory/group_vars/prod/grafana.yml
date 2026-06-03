@@ -1,5 +1,0 @@
-grafana_networks:
-  - internal_net
-  - lan_pub
-
-grafana_admin_password: "{{ vault_grafana_admin_password }}"

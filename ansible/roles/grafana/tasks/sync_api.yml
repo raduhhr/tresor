@@ -1,0 +1,327 @@
+---
+- name: Wait for Grafana API health
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/health"
+    method: GET
+    status_code: 200
+  register: _grafana_health
+  retries: 30
+  delay: 2
+  until: _grafana_health.status == 200
+
+- name: Get Grafana datasources
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources"
+    method: GET
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: _grafana_datasources
+  no_log: true
+
+- name: Select existing Prometheus datasource candidates
+  ansible.builtin.set_fact:
+    _grafana_prometheus_datasource_candidates: >-
+      {{
+        _grafana_datasources.json
+        | selectattr('name', 'equalto', 'Prometheus')
+        | list
+      }}
+    _grafana_prometheus_datasource: >-
+      {{
+        _grafana_datasources.json
+        | selectattr('uid', 'equalto', 'prometheus')
+        | first
+        | default({})
+      }}
+
+- name: Remove conflicting Prometheus datasources with wrong UID
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources/uid/{{ item.uid }}"
+    method: DELETE
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code:
+      - 200
+      - 404
+  loop: "{{ _grafana_prometheus_datasource_candidates }}"
+  loop_control:
+    label: "{{ item.uid | default('unknown') }}"
+  no_log: true
+  when:
+    - item.uid is defined
+    - item.uid != 'prometheus'
+
+- name: Refresh Grafana datasources after Prometheus cleanup
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources"
+    method: GET
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: _grafana_datasources_after_cleanup
+  no_log: true
+
+- name: Select canonical Prometheus datasource after cleanup
+  ansible.builtin.set_fact:
+    _grafana_prometheus_datasource: >-
+      {{
+        _grafana_datasources_after_cleanup.json
+        | selectattr('uid', 'equalto', 'prometheus')
+        | first
+        | default({})
+      }}
+
+- name: Create Prometheus datasource via Grafana API
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources"
+    method: POST
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    status_code:
+      - 200
+      - 409
+    body:
+      name: Prometheus
+      uid: prometheus
+      type: prometheus
+      access: proxy
+      url: "http://{{ prometheus_internal_dns_name | default('prometheus-internal') }}:{{ prometheus_port | default(9090) }}"
+      isDefault: true
+      basicAuth: false
+      editable: true
+      jsonData: {}
+  register: _grafana_prometheus_create
+  changed_when: _grafana_prometheus_create.status == 200
+  no_log: true
+  when: _grafana_prometheus_datasource == {} or (_grafana_prometheus_datasource.uid | default('')) != 'prometheus'
+
+- name: Refresh Grafana datasources after Prometheus create
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources"
+    method: GET
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: _grafana_datasources_final
+  no_log: true
+
+- name: Assert canonical Prometheus datasource exists after reconciliation
+  ansible.builtin.assert:
+    that:
+      - _grafana_prometheus_datasource_current_uid == 'prometheus'
+    fail_msg: >-
+      Expected Grafana datasource uid=prometheus after reconciliation, but found Prometheus datasource UIDs:
+      {{ _grafana_datasources_final.json | selectattr('name', 'equalto', 'Prometheus') | map(attribute='uid') | list }}
+  vars:
+    _grafana_prometheus_datasource_current_uid: >-
+      {{
+        (
+          _grafana_datasources_final.json
+          | selectattr('uid', 'equalto', 'prometheus')
+          | map(attribute='uid')
+          | first
+          | default('')
+        )
+      }}
+
+- name: Refresh Prometheus datasource info after reconciliation
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources/uid/prometheus"
+    method: GET
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: _grafana_prometheus_datasource_current
+  no_log: true
+
+- name: Update Prometheus datasource via Grafana API
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources/uid/prometheus"
+    method: PUT
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    status_code: 200
+    body:
+      id: "{{ _grafana_prometheus_datasource_current.json.id }}"
+      uid: prometheus
+      orgId: "{{ _grafana_prometheus_datasource_current.json.orgId | default(1) }}"
+      name: Prometheus
+      type: prometheus
+      access: proxy
+      url: "http://{{ prometheus_internal_dns_name | default('prometheus-internal') }}:{{ prometheus_port | default(9090) }}"
+      basicAuth: false
+      isDefault: true
+      jsonData: {}
+  no_log: true
+
+- name: Select canonical Tresor Index datasource
+  ansible.builtin.set_fact:
+    _grafana_tresor_index_datasource: >-
+      {{
+        _grafana_datasources_final.json
+        | selectattr('uid', 'equalto', grafana_tresor_index_datasource_uid)
+        | first
+        | default({})
+      }}
+  when: grafana_tresor_index_datasource_enabled | bool
+
+- name: Create Tresor Index Postgres datasource via Grafana API
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources"
+    method: POST
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    status_code:
+      - 200
+      - 409
+    body:
+      name: "{{ grafana_tresor_index_datasource_name }}"
+      uid: "{{ grafana_tresor_index_datasource_uid }}"
+      type: postgres
+      access: proxy
+      url: "{{ grafana_tresor_index_db_host }}:{{ grafana_tresor_index_db_port }}"
+      user: "{{ grafana_tresor_index_db_user }}"
+      database: "{{ grafana_tresor_index_db_name }}"
+      basicAuth: false
+      isDefault: false
+      editable: true
+      jsonData:
+        database: "{{ grafana_tresor_index_db_name }}"
+        sslmode: disable
+        postgresVersion: 1600
+        maxOpenConns: 10
+        maxIdleConns: 2
+        connMaxLifetime: 14400
+      secureJsonData:
+        password: "{{ grafana_tresor_index_db_password }}"
+  register: _grafana_tresor_index_create
+  changed_when: _grafana_tresor_index_create.status == 200
+  no_log: true
+  when:
+    - grafana_tresor_index_datasource_enabled | bool
+    - _grafana_tresor_index_datasource == {}
+
+- name: Refresh Tresor Index datasource info after reconciliation
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources/uid/{{ grafana_tresor_index_datasource_uid }}"
+    method: GET
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: _grafana_tresor_index_datasource_current
+  no_log: true
+  when: grafana_tresor_index_datasource_enabled | bool
+
+- name: Update Tresor Index Postgres datasource via Grafana API
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/datasources/uid/{{ grafana_tresor_index_datasource_uid }}"
+    method: PUT
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    status_code: 200
+    body:
+      id: "{{ _grafana_tresor_index_datasource_current.json.id }}"
+      uid: "{{ grafana_tresor_index_datasource_uid }}"
+      orgId: "{{ _grafana_tresor_index_datasource_current.json.orgId | default(1) }}"
+      name: "{{ grafana_tresor_index_datasource_name }}"
+      type: postgres
+      access: proxy
+      url: "{{ grafana_tresor_index_db_host }}:{{ grafana_tresor_index_db_port }}"
+      user: "{{ grafana_tresor_index_db_user }}"
+      database: "{{ grafana_tresor_index_db_name }}"
+      basicAuth: false
+      isDefault: false
+      editable: true
+      jsonData:
+        database: "{{ grafana_tresor_index_db_name }}"
+        sslmode: disable
+        postgresVersion: 1600
+        maxOpenConns: 10
+        maxIdleConns: 2
+        connMaxLifetime: 14400
+      secureJsonData:
+        password: "{{ grafana_tresor_index_db_password }}"
+  no_log: true
+  when: grafana_tresor_index_datasource_enabled | bool
+
+- name: Remove retired managed Grafana dashboards via API
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/dashboards/uid/{{ item }}"
+    method: DELETE
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code:
+      - 200
+      - 404
+  loop: "{{ grafana_retired_dashboard_uids | default([]) }}"
+  no_log: true
+  when: grafana_manage_dashboards | bool
+
+- name: Check managed Grafana folders by UID via API
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/folders/{{ item.uid }}"
+    method: GET
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code:
+      - 200
+      - 404
+  loop: "{{ grafana_managed_folders | default([]) }}"
+  register: _grafana_managed_folder_checks
+  no_log: true
+  when: grafana_manage_dashboards | bool
+
+- name: Create missing managed Grafana folders via API
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/folders"
+    method: POST
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    status_code:
+      - 200
+      - 409
+    body:
+      uid: "{{ item.item.uid }}"
+      title: "{{ item.item.title }}"
+  loop: "{{ _grafana_managed_folder_checks.results | default([]) }}"
+  no_log: true
+  when:
+    - grafana_manage_dashboards | bool
+    - item.status == 404
+
+- name: Import managed Grafana dashboards via API
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/dashboards/db"
+    method: POST
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    status_code: 200
+    body:
+      dashboard: "{{ lookup('ansible.builtin.file', role_path ~ '/files/' ~ item.file) | from_json }}"
+      folderUid: "{{ item.folder_uid }}"
+      overwrite: true
+      message: "Managed by Ansible"
+  loop: "{{ grafana_managed_dashboards }}"
+  no_log: true
+  when: grafana_manage_dashboards | bool

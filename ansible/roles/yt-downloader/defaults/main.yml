@@ -1,0 +1,49 @@
+---
+batchyt_liked_enabled: true
+
+batchyt_controller_source_dir: "/batchyt-source"
+batchyt_root_dir: "/srv/batchyt-liked"
+batchyt_app_dir: "{{ batchyt_root_dir }}/app"
+batchyt_state_dir: "{{ batchyt_root_dir }}/state"
+batchyt_log_dir: "{{ batchyt_root_dir }}/logs"
+batchyt_secret_dir: "{{ batchyt_root_dir }}/secrets"
+batchyt_venv_dir: "{{ batchyt_root_dir }}/venv"
+
+batchyt_run_user: "radu"
+batchyt_run_group: "radu"
+
+batchyt_playlist_url: "https://www.youtube.com/playlist?list=LL"
+batchyt_playlist_dir_name: "UNTZ UNTZ"
+batchyt_playlist_limit: 100
+batchyt_playlist_write_mode: "downloads"
+batchyt_outdir: "/mnt/data/files/Music"
+batchyt_archive_path: "{{ batchyt_state_dir }}/archive.txt"
+batchyt_cookies_path: "{{ batchyt_secret_dir }}/youtube-cookies.txt"
+
+batchyt_media_format: "mp3"
+batchyt_audio_quality: "0"
+batchyt_tag_mode: "incremental"
+batchyt_max_duration: 14400
+batchyt_concurrent_fragments: 3
+batchyt_js_runtimes: "auto"
+batchyt_install_deno: true
+batchyt_deno_install_dir: "/opt/deno"
+batchyt_deno_bin_path: "/usr/local/bin/deno"
+
+batchyt_youtube_cookies_content: ""
+batchyt_youtube_cookies_src: ""
+batchyt_require_cookies_file: true
+
+batchyt_jellyfin_refresh_enabled: true
+batchyt_jellyfin_refresh_always: false
+batchyt_jellyfin_url: "http://10.66.66.2:18096"
+batchyt_jellyfin_api_key: ""
+
+batchyt_timer_on_calendar: "hourly"
+batchyt_timer_randomized_delay: "5min"
+batchyt_timer_persistent: true
+
+batchyt_app_files:
+  - batch_yt_downloader.py
+  - tag_album_from_folder.py
+  - requirements-server.txt

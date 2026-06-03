@@ -1,0 +1,6 @@
+---
+- name: Deploy Tresor Index
+  hosts: tresor
+  become: true
+  roles:
+    - tresor-index

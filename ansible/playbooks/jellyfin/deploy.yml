@@ -58,7 +58,7 @@
         group: "{{ media_group }}"
         mode: "0775"
 
-    - name: Ensure Jellyfin config dirs (owned by container UID:GID)
+    - name: Ensure Jellyfin config/runtime dirs (owned by container UID:GID)
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
@@ -70,15 +70,49 @@
         - "{{ config_root }}/config"
         - "{{ config_root }}/log"
         - "{{ config_root }}/cache"
+        - "{{ config_root }}/metadata"
+        - "{{ config_root }}/transcodes"
+        - "{{ config_root }}/data"
+        - "{{ config_root }}/data/metadata"
+        - "{{ config_root }}/data/transcodes"
+        - "{{ config_root }}/root"
+        - "{{ config_root }}/root/default"
+        - "{{ config_root }}/root/default/metadata"
+        - "{{ config_root }}/root/default/transcodes"
 
-    - name: Seed migrations.xml (prevents UnauthorizedAccessException)
-      ansible.builtin.copy:
-        dest: "{{ config_root }}/config/migrations.xml"
-        content: '<?xml version="1.0" encoding="utf-8"?><migrations />'
-        owner: "{{ run_uid }}"
-        group: "{{ run_gid }}"
-        mode: "0664"
-        force: false
+    - name: Repair legacy Jellyfin migration state files under the config root
+      ansible.builtin.shell: |
+        set -eu
+        files="$(find "{{ config_root }}" -maxdepth 3 -type f \( -name migrations.xml -o -name migration.xml \) 2>/dev/null | sort || true)"
+        if [ -z "$files" ]; then
+          echo missing
+          exit 0
+        fi
+        changed=0
+        for MIGFILE in $files; do
+          if [ "$(basename "$MIGFILE")" = "migration.xml" ]; then
+            rm -f "$MIGFILE"
+            changed=1
+            continue
+          fi
+          BACKUP="${MIGFILE}.backup"
+          if grep -q '<migrations' "$MIGFILE"; then
+            if [ -f "$BACKUP" ] && grep -q '<MigrationOptions' "$BACKUP"; then
+              cp "$BACKUP" "$MIGFILE"
+              changed=1
+            else
+              rm -f "$MIGFILE"
+              changed=1
+            fi
+          fi
+        done
+        if [ "$changed" -eq 1 ]; then
+          echo fixed
+        else
+          echo ok
+        fi
+      register: _migrations_fix
+      changed_when: _migrations_fix.stdout == 'fixed'
 
     - name: Recursively ensure ownership on config_root (in case of leftovers)
       ansible.builtin.file:
@@ -125,7 +159,28 @@
 
     - name: Derive healthy flag
       ansible.builtin.set_fact:
-        _jf_healthy: "{{ _jf_health == 'healthy' }}"
+        _jf_healthy: "{{ (_jf_health == 'healthy') or (_jf_health == '' and _jf_running) }}"
+
+    - name: Derive current image match
+      ansible.builtin.set_fact:
+        _jf_image_current: "{{ jf_info.container.Config.Image | default('') if _jf_exists else '' }}"
+        _jf_image_matches: "{{ (jf_info.container.Config.Image | default('')) == jellyfin_image if _jf_exists else false }}"
+
+    - name: Stop existing Jellyfin container after migrations repair
+      when:
+        - _jf_exists
+        - _migrations_fix.stdout == 'fixed'
+      community.docker.docker_container:
+        name: jellyfin
+        state: stopped
+        stop_timeout: 30
+      failed_when: false
+
+    - name: Force a clean start path after migrations repair
+      when: _migrations_fix.stdout == 'fixed'
+      ansible.builtin.set_fact:
+        _jf_running: false
+        _jf_healthy: false
 
     # --- Port owner discovery / protection ---
     - name: Query if any container holds host port {{ jellyfin_http_port }}
@@ -145,8 +200,13 @@
 
     - name: Parse holder facts
       ansible.builtin.set_fact:
-        _holder_id:   "{{ (port_holders.stdout_lines | default([])) | first | default('') | regex_search('^([^ ]+)', '\\1') | default('') }}"
-        _holder_name: "{{ (port_holders.stdout_lines | default([])) | first | default('') | regex_search('^[^ ]+ ([^ ]+)', '\\1') | default('') }}"
+        _holder_line: "{{ (port_holders.stdout_lines | default([])) | first | default('') }}"
+      changed_when: false
+
+    - name: Parse holder id and name
+      ansible.builtin.set_fact:
+        _holder_id: "{{ (_holder_line.split()[0] if (_holder_line.split() | length) > 0 else '') }}"
+        _holder_name: "{{ (_holder_line.split()[1] if (_holder_line.split() | length) > 1 else '') }}"
       changed_when: false
 
     - name: Detect any process listening on {{ jellyfin_http_port }} (host)
@@ -206,13 +266,14 @@
       when:
         - _jf_running
         - _jf_healthy
+        - _jf_image_matches
         - (_holder_name == '' or _holder_name == 'jellyfin')
       ansible.builtin.debug:
         msg: "Jellyfin already healthy on {{ jellyfin_http_port }} — nothing to do."
 
     - name: Ensure Jellyfin container is present and started
       when: >
-        not ( _jf_running and _jf_healthy and (_holder_name == '' or _holder_name == 'jellyfin') )
+        not ( _jf_running and _jf_healthy and _jf_image_matches and (_holder_name == '' or _holder_name == 'jellyfin') )
         and not ( jellyfin_skip_due_to_port_conflict | default(false) )
       community.docker.docker_container:
         name: jellyfin
@@ -229,9 +290,23 @@
           - "{{ jellyfin_bind_addr }}:{{ jellyfin_http_port }}:8096"
         volumes: "{{ jellyfin_volumes }}"
         devices: "{{ jellyfin_devices }}"
-        healthcheck:
-          test: ["CMD-SHELL", "curl --noproxy 'localhost' -LksSf http://localhost:8096/health || exit 1"]
-          interval: 30s
-          timeout: 10s
-          retries: 10
-          start_period: 30s
+
+    - name: Wait for Jellyfin port to accept connections
+      when: not ( jellyfin_skip_due_to_port_conflict | default(false) )
+      ansible.builtin.wait_for:
+        host: "{{ jellyfin_bind_addr }}"
+        port: "{{ jellyfin_http_port }}"
+        delay: 2
+        timeout: 90
+
+    - name: Probe Jellyfin HTTP endpoint
+      when: not ( jellyfin_skip_due_to_port_conflict | default(false) )
+      ansible.builtin.uri:
+        url: "http://{{ jellyfin_bind_addr }}:{{ jellyfin_http_port }}/"
+        method: GET
+        follow_redirects: safe
+        status_code:
+          - 200
+          - 302
+          - 401
+        timeout: 15

@@ -1,0 +1,122 @@
+- name: Inspect Tresor Index civic quarantine rows
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Summarize civic quarantine reasons
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT source_id,
+               CASE
+                 WHEN reason LIKE 'failed to fetch nominal vote%' THEN 'failed to fetch nominal vote'
+                 WHEN reason LIKE 'failed to fetch Senate nominal vote%' THEN 'failed to fetch Senate nominal vote'
+                 WHEN reason LIKE 'failed to fetch Senate project context%' THEN 'failed to fetch Senate project context'
+                 WHEN reason LIKE 'failed to fetch Senate vote list%' THEN 'failed to fetch Senate vote list'
+                 WHEN reason LIKE 'failed to navigate Senate calendar%' THEN 'failed to navigate Senate calendar'
+                 WHEN reason LIKE '%URL input should be a string or URL%' THEN 'validation: missing/bad URL'
+                 ELSE left(reason, 140)
+               END AS reason_group,
+               count(*) AS rows,
+               min(seen_at) AS first_seen,
+               max(seen_at) AS last_seen
+        FROM quarantine_items
+        WHERE source_id IN ('cdep_final_votes', 'senat_final_votes')
+        GROUP BY source_id, reason_group
+        ORDER BY source_id, rows DESC, reason_group;
+        "
+      register: reason_summary
+      changed_when: false
+
+    - name: Show civic quarantine samples
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT id,
+               source_id,
+               seen_at,
+               left(reason, 220) AS reason,
+               left(payload::text, 900) AS payload_excerpt
+        FROM quarantine_items
+        WHERE source_id IN ('cdep_final_votes', 'senat_final_votes')
+        ORDER BY seen_at DESC, id DESC
+        LIMIT 24;
+        "
+      register: samples
+      changed_when: false
+
+    - name: Show civic quarantine payload keys
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT source_id,
+               jsonb_object_keys(payload) AS payload_key,
+               count(*) AS rows
+        FROM quarantine_items
+        WHERE source_id IN ('cdep_final_votes', 'senat_final_votes')
+        GROUP BY source_id, payload_key
+        ORDER BY source_id, rows DESC, payload_key;
+        "
+      register: payload_keys
+      changed_when: false
+
+    - name: Check whether quarantined civic dates were later covered
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        WITH suspect_dates(chamber, day) AS (
+          VALUES
+            ('Senat', DATE '2022-12-31'),
+            ('Senat', DATE '2023-06-26'),
+            ('Senat', DATE '2023-06-27'),
+            ('Senat', DATE '2023-06-28'),
+            ('Camera Deputatilor', DATE '2026-05-05'),
+            ('Camera Deputatilor', DATE '2026-05-06'),
+            ('Camera Deputatilor', DATE '2026-05-07'),
+            ('Camera Deputatilor', DATE '2026-05-08'),
+            ('Camera Deputatilor', DATE '2026-05-09'),
+            ('Camera Deputatilor', DATE '2026-05-10'),
+            ('Camera Deputatilor', DATE '2026-05-11'),
+            ('Camera Deputatilor', DATE '2026-05-12'),
+            ('Camera Deputatilor', DATE '2026-05-13'),
+            ('Camera Deputatilor', DATE '2026-05-14'),
+            ('Camera Deputatilor', DATE '2026-05-15'),
+            ('Camera Deputatilor', DATE '2026-05-16'),
+            ('Camera Deputatilor', DATE '2026-05-17'),
+            ('Camera Deputatilor', DATE '2026-05-18')
+        )
+        SELECT s.chamber,
+               s.day,
+               count(v.vote_id) AS stored_votes
+        FROM suspect_dates s
+        LEFT JOIN parliament_votes v
+          ON v.chamber = s.chamber
+         AND v.vote_time::date = s.day
+        GROUP BY s.chamber, s.day
+        ORDER BY s.chamber, s.day;
+        "
+      register: suspect_date_coverage
+      changed_when: false
+
+    - name: Check quarantined Senate project context vote
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT v.vote_id,
+               v.vote_time::date AS vote_day,
+               v.bill_key,
+               left(v.title, 120) AS vote_title,
+               b.source_url IS NOT NULL AS has_bill_url,
+               b.title IS NOT NULL AS has_bill_title,
+               jsonb_array_length(COALESCE(b.documents, '[]'::jsonb)) AS documents
+        FROM parliament_votes v
+        LEFT JOIN parliament_bills b ON b.bill_key = v.bill_key
+        WHERE v.vote_id = 'senat:ef372a8c-61c3-4a74-be0f-5d3b89348ff2';
+        "
+      register: suspect_project_context
+      changed_when: false
+
+    - name: Show civic quarantine inspection
+      ansible.builtin.debug:
+        msg:
+          reason_summary: "{{ reason_summary.stdout }}"
+          payload_keys: "{{ payload_keys.stdout }}"
+          suspect_date_coverage: "{{ suspect_date_coverage.stdout }}"
+          suspect_project_context: "{{ suspect_project_context.stdout }}"
+          samples: "{{ samples.stdout }}"

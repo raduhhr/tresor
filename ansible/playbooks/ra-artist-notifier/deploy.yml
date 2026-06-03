@@ -1,0 +1,8 @@
+---
+- name: Deploy Resident Advisor artist event notifier
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  roles:
+    - role: ra-artist-notifier

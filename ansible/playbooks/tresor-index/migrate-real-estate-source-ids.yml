@@ -1,0 +1,127 @@
+---
+- name: Migrate Tresor Index real estate source ids
+  hosts: tresor
+  gather_facts: false
+
+  tasks:
+    - name: Rename legacy 50-200k real estate source ids to 50-1m ids
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - tresor-index-scheduler
+          - python
+          - -c
+          - |
+            from tresor_index import db
+
+            mapping = {
+                "olx_bucuresti_case_50_200k_eur": "olx_bucuresti_case_50_1m_eur",
+                "olx_bucuresti_apartamente_50_200k_eur": "olx_bucuresti_apartamente_50_1m_eur",
+                "olx_cluj_case_50_200k_eur": "olx_cluj_case_50_1m_eur",
+                "olx_cluj_apartamente_50_200k_eur": "olx_cluj_apartamente_50_1m_eur",
+            }
+
+            moved = 0
+            merged = 0
+            runs = 0
+            quarantined = 0
+
+            with db.connect() as conn:
+                with conn.cursor() as cur:
+                    for old_id, new_id in mapping.items():
+                        cur.execute("SELECT 1 FROM sources WHERE id = %s", (old_id,))
+                        if cur.fetchone() is None:
+                            continue
+
+                        cur.execute("SELECT 1 FROM sources WHERE id = %s", (new_id,))
+                        if cur.fetchone() is None:
+                            cur.execute(
+                                """
+                                INSERT INTO sources (
+                                    id, name, source_type, category, url, enabled,
+                                    interval_minutes, parser, config, created_at, updated_at
+                                )
+                                SELECT %s, name, source_type, category, url, enabled,
+                                       interval_minutes, parser, config, created_at, now()
+                                FROM sources
+                                WHERE id = %s
+                                ON CONFLICT (id) DO NOTHING
+                                """,
+                                (new_id, old_id),
+                            )
+
+                        cur.execute(
+                            """
+                            SELECT old_items.id AS old_item_id, new_items.id AS new_item_id
+                            FROM items old_items
+                            JOIN items new_items
+                              ON new_items.source_id = %s
+                             AND new_items.canonical_url = old_items.canonical_url
+                            WHERE old_items.source_id = %s
+                            """,
+                            (new_id, old_id),
+                        )
+                        duplicates = cur.fetchall()
+                        for row in duplicates:
+                            cur.execute(
+                                """
+                                INSERT INTO item_versions (
+                                    item_id, observed_at, title, description,
+                                    content_text, content_hash, metadata
+                                )
+                                SELECT %s, observed_at, title, description,
+                                       content_text, content_hash, metadata
+                                FROM item_versions
+                                WHERE item_id = %s
+                                ON CONFLICT (item_id, content_hash) DO NOTHING
+                                """,
+                                (row["new_item_id"], row["old_item_id"]),
+                            )
+                            cur.execute(
+                                "UPDATE observations SET item_id = %s WHERE item_id = %s",
+                                (row["new_item_id"], row["old_item_id"]),
+                            )
+                            cur.execute("DELETE FROM items WHERE id = %s", (row["old_item_id"],))
+                            merged += 1
+
+                        cur.execute(
+                            "UPDATE items SET source_id = %s WHERE source_id = %s",
+                            (new_id, old_id),
+                        )
+                        moved += cur.rowcount
+
+                        cur.execute(
+                            "UPDATE fetch_runs SET source_id = %s WHERE source_id = %s",
+                            (new_id, old_id),
+                        )
+                        runs += cur.rowcount
+
+                        cur.execute(
+                            "UPDATE quarantine_items SET source_id = %s WHERE source_id = %s",
+                            (new_id, old_id),
+                        )
+                        quarantined += cur.rowcount
+
+                        cur.execute(
+                            """
+                            UPDATE observations
+                            SET metadata = jsonb_set(metadata, '{source_id}', to_jsonb(%s::text), true)
+                            WHERE metadata->>'source_id' = %s
+                            """,
+                            (new_id, old_id),
+                        )
+
+                        cur.execute("DELETE FROM sources WHERE id = %s", (old_id,))
+
+                conn.commit()
+
+            print(f"moved_items={moved} merged_duplicates={merged} fetch_runs={runs} quarantine_items={quarantined}")
+      register: _tresor_index_source_id_migration
+      changed_when: >-
+        'moved_items=0 merged_duplicates=0 fetch_runs=0 quarantine_items=0'
+        not in _tresor_index_source_id_migration.stdout
+
+    - name: Show migration result
+      ansible.builtin.debug:
+        msg: "{{ _tresor_index_source_id_migration.stdout }}"

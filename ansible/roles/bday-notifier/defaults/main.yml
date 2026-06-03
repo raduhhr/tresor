@@ -25,7 +25,7 @@ bday_notifier_run_group: "ansible"
 bday_notifier_cron_times: "0 0,8,16 * * *"
 
 # === Logic ===
-bday_notifier_timezone: "UTC"
+bday_notifier_timezone: "Europe/Bucharest"
 
 bday_notifier_people: []
 # example:

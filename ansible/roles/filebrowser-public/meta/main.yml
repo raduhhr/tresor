@@ -1,8 +1,8 @@
 ---
 galaxy_info:
-  author: admin
+  author: radu
   description: >
-    Public filebrowser for friends at cloud.example.com. Serves /mnt/data/cloud
+    Public filebrowser for friends at cloud.raduhhr.xyz. Serves /mnt/data/cloud
     only. Exposed via WireGuard → VPS nginx (nginx-music role, cloud.conf vhost).
     Completely isolated from the personal filebrowser container.
   min_ansible_version: "2.14"

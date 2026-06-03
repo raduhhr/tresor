@@ -10,7 +10,64 @@
   community.docker.docker_network:
     name: "{{ prometheus_network }}"
     state: present
-  when: prometheus_expose_host_port | default(true) | bool
+
+- name: Ensure Prometheus textfile directory exists
+  ansible.builtin.file:
+    path: "{{ prometheus_textfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure Prometheus exporters app dir exists
+  ansible.builtin.file:
+    path: "{{ prometheus_minecraft_metrics_app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: prometheus_minecraft_metrics_enabled | bool
+
+- name: Install Minecraft metrics textfile collector
+  ansible.builtin.copy:
+    src: minecraft_status_textfile.py
+    dest: "{{ prometheus_minecraft_metrics_script_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: prometheus_minecraft_metrics_enabled | bool
+
+- name: Install Minecraft metrics systemd service
+  ansible.builtin.template:
+    src: minecraft-metrics.service.j2
+    dest: "/etc/systemd/system/{{ prometheus_minecraft_metrics_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  when: prometheus_minecraft_metrics_enabled | bool
+
+- name: Install Minecraft metrics systemd timer
+  ansible.builtin.template:
+    src: minecraft-metrics.timer.j2
+    dest: "/etc/systemd/system/{{ prometheus_minecraft_metrics_service_name }}.timer"
+    owner: root
+    group: root
+    mode: "0644"
+  when: prometheus_minecraft_metrics_enabled | bool
+
+- name: Enable Minecraft metrics timer
+  ansible.builtin.systemd:
+    name: "{{ prometheus_minecraft_metrics_service_name }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: prometheus_minecraft_metrics_enabled | bool
+
+- name: Run Minecraft metrics collector once
+  ansible.builtin.systemd:
+    name: "{{ prometheus_minecraft_metrics_service_name }}.service"
+    state: started
+  when: prometheus_minecraft_metrics_enabled | bool
 
 # =====================================================
 # 1️⃣ Node Exporter – host metrics (internal only)
@@ -21,6 +78,7 @@
     image: "{{ node_exporter_image }}"
     pull: true
     restart_policy: unless-stopped
+    hostname: "{{ inventory_hostname }}"  # stable nodename label across restarts
     networks:
       - name: "{{ prometheus_network }}"
     # No published_ports — Prometheus scrapes via internal_net
@@ -28,11 +86,14 @@
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
+      - "{{ prometheus_textfile_dir }}:/textfile:ro"
     command:
       - "--path.procfs=/host/proc"
       - "--path.sysfs=/host/sys"
       - "--path.rootfs=/rootfs"
       - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+      - "--collector.pressure"
+      - "--collector.textfile.directory=/textfile"
     user: "65534:65534"
     read_only: true
     state: started
@@ -57,7 +118,7 @@
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
     command:
-      - "--housekeeping_interval=10s"
+      - "--housekeeping_interval=5s"
       - "--docker_only=true"
     devices:
       - /dev/kmsg:/dev/kmsg
@@ -98,9 +159,16 @@
     image: "{{ prometheus_image }}"
     pull: true
     restart_policy: unless-stopped
+    comparisons:
+      networks: strict
     networks: >-
       {{
-        [{'name': (prometheus_network | default('internal_net'))}]
+        [
+          {
+            'name': (prometheus_network | default('internal_net')),
+            'aliases': [prometheus_internal_dns_name | default('prometheus-internal')]
+          }
+        ]
         + ([{'name': 'lan_pub'}] if (prometheus_expose_host_port | default(true) | bool) else [])
       }}
     published_ports: "{{ [prometheus_bind_addr ~ ':' ~ (prometheus_host_port | string) ~ ':' ~ (prometheus_port | string)] if (prometheus_expose_host_port | default(true) | bool) else omit }}"
@@ -110,7 +178,7 @@
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=15d"
+      - "--storage.tsdb.retention.time={{ prometheus_retention_time }}"
       - "--web.console.libraries=/usr/share/prometheus/console_libraries"
       - "--web.console.templates=/usr/share/prometheus/consoles"
       - "--web.listen-address=0.0.0.0:9090"
@@ -127,17 +195,6 @@
 # =====================================================
 # 6️⃣ Verification
 # =====================================================
-- name: Wait for Prometheus to be ready (published mode)
-  ansible.builtin.uri:
-    url: "http://{{ prometheus_bind_addr }}:{{ prometheus_host_port }}/-/ready"
-    status_code: 200
-  register: _prom_ready
-  retries: 15
-  delay: 2
-  until: _prom_ready.status == 200
-  changed_when: false
-  when: prometheus_expose_host_port | bool
-
 - name: Wait for Prometheus container to be running (internal-only mode)
   community.docker.docker_container_info:
     name: "{{ prometheus_container_name }}"
@@ -149,6 +206,25 @@
     - _prom_info.container.State.Running
   changed_when: false
   when: not (prometheus_expose_host_port | bool)
+
+- name: Wait for Prometheus to be ready inside the container
+  ansible.builtin.command: >
+    docker exec {{ prometheus_container_name }}
+    wget -q -O- http://localhost:{{ prometheus_port }}/-/ready
+  register: _prom_ready
+  retries: 20
+  delay: 3
+  until: _prom_ready.rc == 0 and ('Ready' in _prom_ready.stdout)
+  changed_when: false
+
+- name: Check Prometheus published port (best effort)
+  ansible.builtin.uri:
+    url: "http://{{ prometheus_bind_addr }}:{{ prometheus_host_port }}/-/ready"
+    status_code: 200
+  register: _prom_ready_published
+  changed_when: false
+  failed_when: false
+  when: prometheus_expose_host_port | bool
 
 - name: Get host IP address
   ansible.builtin.set_fact:
@@ -167,4 +243,5 @@
       - "  • Web UI → http://{{ _host_ip }}:{{ prometheus_host_port }}"
       - "  • Targets → http://{{ _host_ip }}:{{ prometheus_host_port }}/targets"
       - ""
-      - "Grafana datasource: http://prometheus:9090 (internal_net)"
+      - "Grafana datasource: http://prometheus:9090 ({{ prometheus_network }})"
+      - "Published port check: {{ 'ok' if (_prom_ready_published.status | default(0)) == 200 else 'unverified' }}"

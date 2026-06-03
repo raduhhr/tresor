@@ -1,0 +1,50 @@
+---
+plane_watcher_enabled: false
+
+plane_watcher_container_name: plane-watcher
+plane_watcher_image: ""
+
+plane_watcher_network_primary: internal_net
+plane_watcher_network_publish: lan_pub
+
+plane_watcher_config_dir: /mnt/ssd/configs/plane-watcher
+plane_watcher_data_dir: "{{ plane_watcher_config_dir }}/data"
+plane_watcher_globe_history_dir: "{{ plane_watcher_data_dir }}/globe_history"
+plane_watcher_graphs1090_dir: "{{ plane_watcher_data_dir }}/graphs1090"
+plane_watcher_config_file: "{{ plane_watcher_config_dir }}/config.yml"
+
+plane_watcher_bind_addr: 127.0.0.1
+plane_watcher_host_port: 8083
+plane_watcher_container_port: 80
+plane_watcher_expose_host_port: true
+plane_watcher_public_host: ""
+plane_watcher_enable_traefik: false
+plane_watcher_traefik_entrypoint: web
+plane_watcher_traefik_middlewares: ""
+
+plane_watcher_location_latitude: 46.7557
+plane_watcher_location_longitude: 23.5605
+plane_watcher_location_altitude_m: 10
+plane_watcher_timezone: Europe/Bucharest
+
+plane_watcher_sdr_device_type: rtlsdr
+plane_watcher_sdr_device_serial: "00000001"
+plane_watcher_readsb_gain: auto
+plane_watcher_readsb_ppm: ""
+plane_watcher_readsb_stats_range: true
+
+plane_watcher_loglevel: info
+plane_watcher_feeder_name: tresor-plane-watcher
+plane_watcher_ultrafeeder_config: ""
+
+plane_watcher_tar1090_page_title: Plane Watcher
+plane_watcher_tar1090_display_units: metric
+plane_watcher_tar1090_enable_ac_db: true
+plane_watcher_tar1090_flightaware_links: true
+plane_watcher_tar1090_site_show: true
+plane_watcher_tar1090_planecount_in_title: true
+plane_watcher_tar1090_message_rate_in_title: true
+plane_watcher_graphs1090_dark_mode: true
+plane_watcher_prometheus_enable: false
+
+plane_watcher_pause_satelite_watcher_recording: true

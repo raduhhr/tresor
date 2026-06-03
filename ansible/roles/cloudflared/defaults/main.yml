@@ -5,7 +5,7 @@
 cloudflared:
   enabled: true
   name: "cloudflared"
-  tz: "UTC"
+  tz: "Europe/Bucharest"
 
   # Docker network to attach to
   network: "public_net"

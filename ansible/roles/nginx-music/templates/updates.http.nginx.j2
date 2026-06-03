@@ -1,0 +1,22 @@
+# Managed by Ansible: nginx-music role / {{ nginx_updates_config_name }} (HTTP bootstrap)
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name {{ nginx_updates_domain }};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  root {{ nginx_updates_root }};
+  autoindex off;
+
+  location = / {
+    return 404;
+  }
+
+  location /{{ nginx_updates_path }}/ {
+    try_files $uri =404;
+  }
+}

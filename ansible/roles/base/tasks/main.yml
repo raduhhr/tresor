@@ -90,7 +90,7 @@
 - name: Set timezone
   become: true
   community.general.timezone:
-    name: "{{ base_timezone | default('UTC') }}"
+    name: "{{ base_timezone | default('Europe/Bucharest') }}"
   tags: [base, base:locale]
 
 - name: Ensure locale is present
@@ -106,7 +106,7 @@
   ansible.builtin.lineinfile:
     path: /etc/systemd/timesyncd.conf
     regexp: '^#?NTP='
-    line: "NTP={{ base_ntp_servers | default('0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org') }}"
+    line: "NTP={{ base_ntp_servers | join(' ') if base_ntp_servers is not string else base_ntp_servers }}"
     create: true
   notify: Restart timesyncd
   tags: [base, base:ntp]

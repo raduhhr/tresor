@@ -1,0 +1,15 @@
+---
+- name: Start Plane Watcher
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Start Plane Watcher container
+      community.docker.docker_container:
+        name: plane-watcher
+        state: started
+
+    - name: Show status after start
+      ansible.builtin.debug:
+        msg: "Plane Watcher container started."

@@ -1,0 +1,21 @@
+---
+# Runs all service deploy playbooks in sequence.
+
+- import_playbook: ../bday-notifier/deploy.yml
+- import_playbook: ../cloudflared/deploy.yml
+- import_playbook: ../content-notifier/deploy.yml
+- import_playbook: ../filebrowser/deploy.yml
+- import_playbook: ../filebrowser-public/deploy.yml
+- import_playbook: ../grafana/deploy.yml
+- import_playbook: ../jellyfin/deploy.yml
+- import_playbook: ../jellyfin-music/deploy.yml
+- import_playbook: ../kiwix/deploy.yml
+- import_playbook: ../satelite-watcher/deploy.yml
+- import_playbook: ../paper/deploy.yml
+- import_playbook: ../paper-join-notifier/deploy.yml
+- import_playbook: ../prometheus/deploy.yml
+- import_playbook: ../ra-artist-notifier/deploy.yml
+- import_playbook: ../steam-free-notifier/deploy.yml
+- import_playbook: ../traefik/deploy.yml
+- import_playbook: ../tresor-index/deploy.yml
+- import_playbook: ../uptime-kuma/deploy.yml

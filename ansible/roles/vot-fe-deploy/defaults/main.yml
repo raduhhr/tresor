@@ -1,0 +1,27 @@
+---
+vot_fe_runtime_user: vot-fe
+vot_fe_runtime_group: vot-fe
+vot_fe_deploy_user: vot-fe-deploy
+vot_fe_deploy_group: vot-fe-deploy
+
+vot_fe_root: /srv/vot-fe
+vot_fe_current_path: /srv/vot-fe/current
+vot_fe_releases_root: /srv/vot-fe/releases
+vot_fe_staging_root: /srv/vot-fe-staging
+vot_fe_deploy_home: /srv/vot-fe-deploy
+
+vot_fe_service_name: vot-fe
+vot_fe_env_path: /etc/vot-fe.env
+vot_fe_promote_path: /usr/local/bin/vot-fe-promote
+vot_fe_sudoers_path: /etc/sudoers.d/90-vot-fe-deploy
+vot_fe_keep_releases: 5
+
+vot_fe_node_bin: /usr/bin/node
+vot_fe_host: "127.0.0.1"
+vot_fe_port: 4321
+vot_fe_api_url: "http://127.0.0.1:18080"
+
+# Add the GitHub Actions deploy public key here later, preferably via vault:
+# vot_fe_deploy_authorized_keys:
+#   - "ssh-ed25519 AAAA... github-actions-vot-fe"
+vot_fe_deploy_authorized_keys: []

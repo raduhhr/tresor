@@ -1,0 +1,85 @@
+---
+- name: Export saved Grafana dashboards from grafana.db
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    grafana_db_path: "/mnt/ssd/configs/grafana/data/grafana.db"
+    remote_export_dir: "/tmp/grafana-dashboard-export"
+    local_export_dir: "{{ playbook_dir }}/../../exports/grafana"
+    dashboard_titles: "{{ grafana_dashboard_export_titles | default(['Virtualization - Docker', 'Host']) }}"
+
+  tasks:
+    - name: Ensure remote export directory exists
+      ansible.builtin.file:
+        path: "{{ remote_export_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Export requested dashboards from Grafana DB
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+        import os
+        import re
+        import sqlite3
+
+        db = {{ grafana_db_path | to_json }}
+        out_dir = {{ remote_export_dir | to_json }}
+        titles = {{ dashboard_titles | to_json }}
+
+        os.makedirs(out_dir, exist_ok=True)
+        conn = sqlite3.connect(db)
+        cur = conn.cursor()
+        try:
+            for title in titles:
+                row = cur.execute(
+                    "SELECT uid, data FROM dashboard WHERE title = ? ORDER BY id DESC LIMIT 1",
+                    (title,),
+                ).fetchone()
+                if not row:
+                    print(f"missing::{title}")
+                    continue
+                uid, data = row
+                slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+                path = os.path.join(out_dir, f"{slug}__{uid}.json")
+                with open(path, "w", encoding="utf-8") as fh:
+                    parsed = json.loads(data)
+                    json.dump(parsed, fh, indent=2, ensure_ascii=False)
+                    fh.write("\n")
+                print(f"exported::{title}::{path}")
+        finally:
+            conn.close()
+        PY
+      register: _dashboard_export
+      changed_when: "'exported::' in _dashboard_export.stdout"
+
+    - name: Show export result
+      ansible.builtin.debug:
+        var: _dashboard_export.stdout_lines
+
+    - name: Ensure local export directory exists
+      ansible.builtin.file:
+        path: "{{ local_export_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Find exported dashboard files on remote host
+      ansible.builtin.find:
+        paths: "{{ remote_export_dir }}"
+        patterns: "*.json"
+      register: _exported_dashboards
+
+    - name: Fetch exported dashboards to control repo
+      ansible.builtin.fetch:
+        src: "{{ item.path }}"
+        dest: "{{ local_export_dir }}/"
+        flat: true
+      loop: "{{ _exported_dashboards.files }}"
+
+    - name: Show local export directory
+      ansible.builtin.debug:
+        msg: "Exported dashboards fetched to {{ local_export_dir }}"

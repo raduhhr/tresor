@@ -1,0 +1,25 @@
+---
+- name: Remove Tresor Index scheduler container
+  community.docker.docker_container:
+    name: "{{ tresor_index_scheduler_container_name }}"
+    state: absent
+    force_kill: true
+
+- name: Remove Tresor Index database container
+  community.docker.docker_container:
+    name: "{{ tresor_index_db_container_name }}"
+    state: absent
+    force_kill: true
+
+- name: Remove Tresor Index app image
+  community.docker.docker_image:
+    name: "{{ tresor_index_app_image }}"
+    state: absent
+    force_absent: true
+  when: tresor_index_remove_image | default(false) | bool
+
+- name: Remove Tresor Index data directory when explicitly requested
+  ansible.builtin.file:
+    path: "{{ tresor_index_config_dir }}"
+    state: absent
+  when: tresor_index_remove_data | default(false) | bool

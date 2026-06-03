@@ -1,0 +1,57 @@
+---
+- name: Remove Satelite watcher runtime
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_purge_data: false
+
+  tasks:
+    - name: Stop and disable Satelite watcher timer
+      ansible.builtin.systemd:
+        name: satelite-watcher-schedule.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Stop Satelite watcher service
+      ansible.builtin.systemd:
+        name: satelite-watcher-schedule.service
+        state: stopped
+      failed_when: false
+
+    - name: Stop legacy Meteor timer after rename
+      ansible.builtin.systemd:
+        name: meteor-schedule.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Stop legacy Meteor service after rename
+      ansible.builtin.systemd:
+        name: meteor-schedule.service
+        state: stopped
+      failed_when: false
+
+    - name: Remove Satelite Watcher systemd units
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/satelite-watcher-schedule.service
+        - /etc/systemd/system/satelite-watcher-schedule.timer
+        - /etc/systemd/system/satelite-watcher-record@.service
+        - /etc/systemd/system/meteor-schedule.service
+        - /etc/systemd/system/meteor-schedule.timer
+        - /etc/systemd/system/meteor-record@.service
+
+    - name: Reload systemd after unit removal
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Optionally purge Satelite Watcher data tree
+      ansible.builtin.file:
+        path: /opt/satelite-watcher
+        state: absent
+      when: satelite_watcher_purge_data | bool

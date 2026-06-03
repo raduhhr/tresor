@@ -1,0 +1,15 @@
+---
+batchyt_deploy_user: batchyt-deploy
+batchyt_deploy_group: batchyt-deploy
+batchyt_deploy_home: /srv/batchyt-update-deploy
+batchyt_deploy_staging_root: /srv/batchyt-update-staging
+batchyt_deploy_public_dir: /var/www/updates.raduhhr.xyz/batchyt
+batchyt_deploy_promote_path: /usr/local/bin/batchyt-promote-update
+batchyt_deploy_sudoers_path: /etc/sudoers.d/90-batchyt-deploy
+batchyt_deploy_installer_name: BatchYTDownloaderSetup.exe
+batchyt_deploy_manifest_name: update.json
+
+# Add the GitHub Actions deploy public key here later, preferably via vault:
+# batchyt_deploy_authorized_keys:
+#   - "ssh-ed25519 AAAA... github-actions-batchyt"
+batchyt_deploy_authorized_keys: []

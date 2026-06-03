@@ -1,5 +1,5 @@
 ---
-- name: Restart Jellyfin Music
+- name: Restart Jellyfin Media
   hosts: tresor
   become: true
   gather_facts: false
@@ -8,7 +8,7 @@
     container_name: jellyfin-music
 
   tasks:
-    - name: Restart Jellyfin Music container
+    - name: Restart Jellyfin Media container
       community.docker.docker_container:
         name: "{{ container_name }}"
         restart: true
@@ -16,5 +16,5 @@
 
     - name: Show status after restart
       ansible.builtin.debug:
-        msg: "Jellyfin Music restarted successfully"
+        msg: "Jellyfin Media restarted successfully"
       when: _restart.changed

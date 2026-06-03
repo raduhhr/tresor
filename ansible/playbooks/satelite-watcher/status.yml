@@ -1,0 +1,478 @@
+---
+- name: Satelite watcher status
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_timer_name: "satelite-watcher-schedule.timer"
+    satelite_watcher_scheduler_service_name: "satelite-watcher-schedule.service"
+    satelite_watcher_binary: "/usr/local/bin/satdump"
+    satelite_watcher_log: "/opt/satelite-watcher/logs/scheduler.log"
+    satelite_watcher_record_log: "/opt/satelite-watcher/logs/record.log"
+    satelite_watcher_config_file: "/opt/satelite-watcher/config/config.yml"
+    satelite_watcher_satellites_file: "/opt/satelite-watcher/config/satellites.yml"
+    satelite_watcher_passes_file: "/opt/satelite-watcher/state/passes.json"
+    satelite_watcher_scheduled_file: "/opt/satelite-watcher/state/scheduled.json"
+    satelite_watcher_pass_metadata_dir: "/opt/satelite-watcher/state/pass_metadata"
+
+  tasks:
+    - name: Check SatDump binary
+      ansible.builtin.stat:
+        path: "{{ satelite_watcher_binary }}"
+      register: satelite_watcher_bin
+
+    - name: Probe SDR devices with SatDump
+      ansible.builtin.command: "{{ satelite_watcher_binary }} sdr_probe"
+      register: satelite_watcher_sdr_probe
+      changed_when: false
+      failed_when: false
+      when: satelite_watcher_bin.stat.exists
+
+    - name: Check timer active state
+      ansible.builtin.command: "systemctl is-active {{ satelite_watcher_timer_name }}"
+      register: satelite_watcher_timer_active
+      changed_when: false
+      failed_when: false
+
+    - name: Check timer enabled state
+      ansible.builtin.command: "systemctl is-enabled {{ satelite_watcher_timer_name }}"
+      register: satelite_watcher_timer_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Show timer schedule
+      ansible.builtin.command: "systemctl list-timers {{ satelite_watcher_timer_name }} --all --no-pager"
+      register: satelite_watcher_timers
+      changed_when: false
+      failed_when: false
+
+    - name: Show recent scheduler logs
+      ansible.builtin.command: "journalctl -u {{ satelite_watcher_scheduler_service_name }} -n 20 --no-pager"
+      register: satelite_watcher_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Show scheduler file log tail
+      ansible.builtin.command: "tail -n 50 {{ satelite_watcher_log }}"
+      register: satelite_watcher_file_log
+      changed_when: false
+      failed_when: false
+
+    - name: Show record log tail
+      ansible.builtin.command: "tail -n 30 {{ satelite_watcher_record_log }}"
+      register: satelite_watcher_record_log_tail
+      changed_when: false
+      failed_when: false
+
+    - name: Build Satelite Watcher operator report
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+        from datetime import datetime, timezone
+        import yaml
+
+        try:
+            from zoneinfo import ZoneInfo
+            LOCAL_TZ = ZoneInfo("Europe/Bucharest")
+        except Exception:
+            LOCAL_TZ = timezone.utc
+
+        config_path = Path("{{ satelite_watcher_config_file }}")
+        satellites_cfg_path = Path("{{ satelite_watcher_satellites_file }}")
+        passes_path = Path("{{ satelite_watcher_passes_file }}")
+        scheduled_path = Path("{{ satelite_watcher_scheduled_file }}")
+        default_pass_metadata_dir = Path("{{ satelite_watcher_pass_metadata_dir }}")
+
+        def load_json(path, default=None):
+            if not path.exists():
+                return {} if default is None else default
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return {} if default is None else default
+
+        def load_yaml(path):
+            if not path.exists():
+                return {}
+            return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+        def parse_ts(value):
+            return datetime.fromisoformat(value)
+
+        def fmt_ts(value):
+            dt = parse_ts(value).astimezone(LOCAL_TZ)
+            return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+        def fmt_utc(value):
+            dt = parse_ts(value).astimezone(timezone.utc)
+            return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        def decode_profile_for(item):
+            value = item.get("decode_profile")
+            if value and str(value).strip().lower() not in {"none", "null", "n/a"}:
+                return str(value)
+            satellite = str(item.get("satellite", "")).upper()
+            if satellite.startswith("NOAA-"):
+                return "noaa_apt"
+            if satellite.startswith("METEOR"):
+                return "meteor_lrpt"
+            if satellite == "ISS SSTV":
+                return "iss_sstv"
+            return "n/a"
+
+        passes_payload = load_json(passes_path)
+        scheduled_payload = load_json(scheduled_path)
+        config = load_yaml(config_path)
+        satellites_cfg = load_yaml(satellites_cfg_path)
+        weather_targets = satellites_cfg.get("satellites", [])
+        iss_cfg = config.get("iss_sstv", {})
+        iss_events_path = Path(paths.get("iss_sstv_events_file", "")) if (paths := config.get("paths", {})).get("iss_sstv_events_file") else None
+        iss_events_payload = load_json(iss_events_path) if iss_events_path else {}
+        tle_cache = load_json(Path(paths.get("tle_cache_file", "")), {}) if paths.get("tle_cache_file") else {}
+        tle_resolved_names = {
+            item.get("name")
+            for item in tle_cache.get("satellites", [])
+            if item.get("name")
+        }
+        weather_target_names = [item.get("name", "unknown") for item in weather_targets]
+        weather_record_target_names = [
+            item.get("name", "unknown")
+            for item in weather_targets
+            if item.get("record_enabled", True)
+        ]
+        resolved_weather_targets = [
+            name for name in weather_target_names
+            if name in tle_resolved_names
+        ]
+        unresolved_weather_targets = [
+            name for name in weather_target_names
+            if name not in tle_resolved_names
+        ]
+        pass_metadata_dir = Path(paths.get("pass_metadata_dir", str(default_pass_metadata_dir)))
+        latest_record = None
+        failed_records = []
+        if pass_metadata_dir.exists():
+            for item in sorted(pass_metadata_dir.glob("*.json")):
+                payload = load_json(item)
+                if not isinstance(payload, dict) or "stage" not in payload:
+                    continue
+                payload["_path"] = str(item)
+                payload["_sort_key"] = payload.get("ended_at") or payload.get("started_at") or payload.get("record_start_utc") or ""
+                if latest_record is None or payload["_sort_key"] > latest_record["_sort_key"]:
+                    latest_record = payload
+                if payload.get("stage") == "failed":
+                    failed_records.append(payload)
+            failed_records.sort(key=lambda item: item.get("_sort_key", ""), reverse=True)
+
+        passes = sorted(
+            passes_payload.get("passes", []),
+            key=lambda item: item.get("record_start_utc", "")
+        )
+        passes_by_id = {item["pass_id"]: item for item in passes if item.get("pass_id")}
+
+        now = datetime.now(timezone.utc)
+        queue = []
+        for pass_id, item in scheduled_payload.get("scheduled", {}).items():
+            if "record_end_utc" not in item:
+                continue
+            try:
+                if parse_ts(item["record_end_utc"]) <= now:
+                    continue
+            except Exception:
+                continue
+            enriched = dict(item)
+            enriched["pass_id"] = pass_id
+            if pass_id in passes_by_id:
+                enriched.update({
+                    "max_elevation_deg": passes_by_id[pass_id].get("max_elevation_deg"),
+                    "peak_azimuth_label": passes_by_id[pass_id].get("peak_azimuth_label"),
+                    "aos_utc": passes_by_id[pass_id].get("aos_utc"),
+                    "tca_utc": passes_by_id[pass_id].get("tca_utc"),
+                    "los_utc": passes_by_id[pass_id].get("los_utc"),
+                    "frequency_hz": passes_by_id[pass_id].get("frequency_hz"),
+                    "decode_profile": passes_by_id[pass_id].get("decode_profile") or enriched.get("decode_profile"),
+                    "timeout_seconds": passes_by_id[pass_id].get("timeout_seconds"),
+                })
+            queue.append(enriched)
+
+        queue.sort(key=lambda item: item.get("record_start_utc", ""))
+
+        sdr = config.get("sdr", {})
+        tle_cfg = config.get("tle", {})
+        space_track_cfg = tle_cfg.get("space_track", {})
+        decode = config.get("decode", {}).get("satelite_watcher_after_record", {})
+        noaa_decode = config.get("decode", {}).get("noaa_apt", {})
+        image_cfg = config.get("decode", {}).get("image_after_decode", {})
+        schedule = config.get("schedule", {})
+        recording_paused = bool(schedule.get("recording_paused", False))
+        recording_pause_reason = str(schedule.get("recording_pause_reason", "") or "").strip()
+        filters = config.get("filter", {})
+        paths = config.get("paths", {})
+        notifications = config.get("notifications", {})
+        weather_prepass_notifications = notifications.get("weather_prepass") or notifications.get("meteor_prepass", {})
+        weather_image_notifications = notifications.get("weather_image") or notifications.get("meteor_good_pass", {})
+        iss_notifications = notifications.get("iss_sstv", {})
+        iss_events = sorted(
+            iss_events_payload.get("events", []),
+            key=lambda item: item.get("start_utc", "")
+        )
+        active_iss_events = []
+        upcoming_iss_events = []
+        for item in iss_events:
+            try:
+                start = parse_ts(item["start_utc"])
+                end = parse_ts(item["end_utc"])
+            except Exception:
+                continue
+            if start <= now <= end:
+                active_iss_events.append(item)
+            elif start > now:
+                upcoming_iss_events.append(item)
+
+        print("")
+        print("========================================")
+        print("SATELITE WATCHER STATUS")
+        print("========================================")
+        print(f"Now                          : {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"Passes in current scan window: {len(passes)}")
+        print(f"Queued recordings            : {len(queue)}")
+        print(f"Scheduler updated at         : {scheduled_payload.get('updated_at_utc', 'n/a')}")
+        print(f"Last scheduler created count : {scheduled_payload.get('created_this_run', 'n/a')}")
+        print(f"Last scheduler canceled count: {scheduled_payload.get('canceled_this_run', 'n/a')}")
+
+        if passes:
+            first = passes[0]
+            last = passes[-1]
+            print(f"Scan window first record time : {fmt_ts(first['record_start_utc'])}")
+            print(f"Scan window last record time  : {fmt_ts(last['record_start_utc'])}")
+        else:
+            print("Scan window first record time : none")
+            print("Scan window last record time  : none")
+
+        print("")
+        print("Recording Parameters")
+        print("--------------------")
+        print(f"Recordings dir               : {paths.get('recordings_dir', 'n/a')}")
+        print(f"SatDump bin                  : {config.get('satdump_bin', 'n/a')}")
+        print(f"SDR source                   : {sdr.get('source', 'n/a')}")
+        print(f"SDR device id                : {sdr.get('device_id', 'n/a')}")
+        print(f"Weather targets              : {', '.join(item.get('name', 'unknown') for item in weather_targets) if weather_targets else 'n/a'}")
+        if recording_paused:
+            print("Weather recording targets    : none (paused)")
+        else:
+            print(f"Weather recording targets    : {', '.join(weather_record_target_names) if weather_record_target_names else 'none'}")
+        print(f"Weather target profiles      : {', '.join(decode_profile_for(item) for item in weather_targets) if weather_targets else 'n/a'}")
+        print(f"Weather frequencies Hz       : {', '.join(str(item.get('frequency_hz', 'n/a')) for item in weather_targets) if weather_targets else 'n/a'}")
+        print(f"Weather TLEs resolved        : {', '.join(resolved_weather_targets) if resolved_weather_targets else 'none'}")
+        print(f"Weather TLEs missing         : {', '.join(unresolved_weather_targets) if unresolved_weather_targets else 'none'}")
+        print(f"Space-Track TLE fallback     : {space_track_cfg.get('enabled', False)}")
+        print(f"Record frequency offset Hz   : {sdr.get('record_frequency_offset_hz', 0)}")
+        print(f"Sample rate                  : {sdr.get('samplerate', 'n/a')}")
+        print(f"Gain                         : {sdr.get('gain', 'n/a')}")
+        print(f"Baseband format              : {sdr.get('baseband_format', 'n/a')}")
+        print(f"Decode after record          : {decode.get('enabled', False)}")
+        print(f"Decode pipeline              : {decode.get('pipeline', 'n/a')}")
+        print(f"Decode source mode           : {decode.get('source_mode', 'n/a')}")
+        print(f"Decode freq shift Hz         : {decode.get('freq_shift_hz', 0)}")
+        print(f"Decode DC block              : {decode.get('dc_block', False)}")
+        print(f"Decode IQ swap               : {decode.get('iq_swap', False)}")
+        print(f"Decode output dir name       : {decode.get('output_dir_name', 'n/a')}")
+        decode_targets = decode.get('target_satellites') or []
+        print(f"Decode target satellites     : {', '.join(decode_targets) if decode_targets else 'all'}")
+        print(f"NOAA APT decode              : {noaa_decode.get('enabled', False)}")
+        print(f"NOAA APT pipeline            : {noaa_decode.get('pipeline', 'n/a')}")
+        print(f"NOAA APT freq shift Hz       : {noaa_decode.get('freq_shift_hz', 0)}")
+        noaa_targets = noaa_decode.get('target_satellites') or []
+        print(f"NOAA APT target satellites   : {', '.join(noaa_targets) if noaa_targets else 'all'}")
+        print(f"Image collection after decode: {image_cfg.get('enabled', False)}")
+        print(f"Image output dir name        : {image_cfg.get('output_dir_name', 'n/a')}")
+        print(f"Lookahead hours              : {schedule.get('lookahead_hours', 'n/a')}")
+        print(f"Pre-record seconds           : {schedule.get('pre_record_seconds', 'n/a')}")
+        print(f"Post-record seconds          : {schedule.get('post_record_seconds', 'n/a')}")
+        print(f"Timeout padding seconds      : {schedule.get('timeout_padding_seconds', 'n/a')}")
+        print(f"Recording paused             : {recording_paused}")
+        if recording_paused:
+            print(f"Recording pause reason       : {recording_pause_reason or 'n/a'}")
+        print(f"Filter mode                  : {filters.get('mode', 'n/a')}")
+        print(f"Min elevation deg            : {filters.get('min_elevation_deg', 'n/a')}")
+        allowed = filters.get('allowed_peak_azimuths') or []
+        print(f"Allowed peak azimuths        : {', '.join(allowed) if allowed else 'all'}")
+
+        print("")
+        print("Notifications")
+        print("-------------")
+        print(f"Discord webhook configured   : {notifications.get('webhook_enabled', False)}")
+        print(f"Weather pre-pass notify      : {weather_prepass_notifications.get('enabled', False)}")
+        print(f"Weather pre-pass timing      : {weather_prepass_notifications.get('timing', 'lead')}")
+        print(f"Weather pre-pass night time  : {weather_prepass_notifications.get('night_before_hour', 'n/a')}:{str(weather_prepass_notifications.get('night_before_minute', 'n/a')).zfill(2)}")
+        print(f"Weather pre-pass lead min    : {weather_prepass_notifications.get('lead_minutes', 'n/a')}")
+        print(f"Weather pre-pass digest days : {weather_prepass_notifications.get('digest_days', 1)}")
+        print(f"Weather pre-pass per-day cap : {weather_prepass_notifications.get('max_passes_per_day', 8)}")
+        priority_sats = weather_prepass_notifications.get('priority_satellites') or []
+        print(f"Weather pre-pass priority    : {', '.join(priority_sats) if priority_sats else 'none'}")
+        print(f"Weather pre-pass min el      : {weather_prepass_notifications.get('min_elevation_deg', 'n/a')}")
+        pre_profiles = weather_prepass_notifications.get('decode_profiles') or []
+        print(f"Weather pre-pass profiles    : {', '.join(pre_profiles) if pre_profiles else 'all'}")
+        pre_az = weather_prepass_notifications.get('peak_azimuths') or []
+        print(f"Weather pre-pass azimuths    : {', '.join(pre_az) if pre_az else 'all'}")
+        print(f"Weather image notify         : {weather_image_notifications.get('enabled', False)}")
+        print(f"Weather image min el         : {weather_image_notifications.get('min_elevation_deg', 'n/a')}")
+        image_profiles = weather_image_notifications.get('decode_profiles') or []
+        print(f"Weather image profiles       : {', '.join(image_profiles) if image_profiles else 'all'}")
+        good_az = weather_image_notifications.get('peak_azimuths') or []
+        print(f"Weather image azimuths       : {', '.join(good_az) if good_az else 'all'}")
+        print(f"ISS announce notify          : {iss_notifications.get('notify_on_announcement', False)}")
+        print(f"ISS start notify             : {iss_notifications.get('notify_on_start', False)}")
+
+        print("")
+        print("Recording Verification")
+        print("----------------------")
+        if latest_record:
+            print(f"Latest pass ID               : {latest_record.get('pass_id', 'n/a')}")
+            print(f"Latest satellite             : {latest_record.get('satellite', 'n/a')}")
+            print(f"Latest stage                 : {latest_record.get('stage', 'n/a')}")
+            print(f"Latest started               : {fmt_ts(latest_record['started_at']) if latest_record.get('started_at') else 'n/a'}")
+            print(f"Latest ended                 : {fmt_ts(latest_record['ended_at']) if latest_record.get('ended_at') else 'n/a'}")
+            print(f"Latest output file           : {latest_record.get('expected_output_file', latest_record.get('output_base', 'n/a'))}")
+            print(f"Latest output size bytes     : {latest_record.get('output_size_bytes', 'n/a')}")
+            print(f"Latest nominal frequency Hz  : {latest_record.get('frequency_hz', 'n/a')}")
+            print(f"Latest decode profile        : {decode_profile_for(latest_record)}")
+            print(f"Latest tuned frequency Hz    : {latest_record.get('tuned_frequency_hz', 'n/a')}")
+            print(f"Latest record offset Hz      : {latest_record.get('record_frequency_offset_hz', 'n/a')}")
+            print(f"Latest verification          : {latest_record.get('verification_message', 'n/a')}")
+            print(f"Latest decode stage          : {latest_record.get('decode_stage', 'n/a')}")
+            print(f"Latest decode freq shift Hz  : {latest_record.get('decode_freq_shift_hz', 'n/a')}")
+            print(f"Latest decode output dir     : {latest_record.get('decode_output_dir', 'n/a')}")
+            print(f"Latest decode verification   : {latest_record.get('decode_verification_message', 'n/a')}")
+            print(f"Latest image stage           : {latest_record.get('image_stage', 'n/a')}")
+            print(f"Latest images output dir     : {latest_record.get('images_output_dir', 'n/a')}")
+            print(f"Latest image verification    : {latest_record.get('image_verification_message', 'n/a')}")
+            print(f"Latest metadata file         : {latest_record.get('_path', 'n/a')}")
+        else:
+            print("Latest pass ID               : none yet")
+
+        print("")
+        print("Recent Failed Recordings")
+        print("------------------------")
+        if failed_records:
+            for item in failed_records[:5]:
+                when = fmt_ts(item["ended_at"]) if item.get("ended_at") else (fmt_ts(item["started_at"]) if item.get("started_at") else "n/a")
+                print(
+                    f"{when} | "
+                    f"{item.get('satellite', '?')} | "
+                    f"{item.get('pass_id', '?')} | "
+                    f"{item.get('verification_message', 'failed without verification detail')}"
+                )
+        else:
+            print("No failed recordings found in pass metadata.")
+
+        print("")
+        print("ISS SSTV Gate")
+        print("-------------")
+        print(f"ISS SSTV enabled             : {iss_cfg.get('enabled', False)}")
+        print(f"ISS events URL               : {iss_cfg.get('events_url', 'n/a')}")
+        print(f"ISS gallery URL              : {iss_cfg.get('gallery_url', 'n/a')}")
+        print(f"ISS events cache updated     : {iss_events_payload.get('updated_at_utc', 'n/a')}")
+        print(f"ISS cached event count       : {len(iss_events)}")
+        print(f"ISS active events            : {len(active_iss_events)}")
+        print(f"ISS upcoming events          : {len(upcoming_iss_events)}")
+        next_iss_event = active_iss_events[0] if active_iss_events else (upcoming_iss_events[0] if upcoming_iss_events else None)
+        if next_iss_event:
+            print(f"ISS next event title         : {next_iss_event.get('title', 'n/a')}")
+            print(f"ISS next event start         : {fmt_ts(next_iss_event['start_utc'])}")
+            print(f"ISS next event end           : {fmt_ts(next_iss_event['end_utc'])}")
+            print(f"ISS next event frequency Hz  : {next_iss_event.get('frequency_hz', iss_cfg.get('default_frequency_hz', 'n/a'))}")
+            print(f"ISS next event mode          : {next_iss_event.get('mode', iss_cfg.get('default_mode', 'n/a'))}")
+        else:
+            print("ISS next event title         : none in cache / lookahead")
+
+        print("")
+        print("Next Queued Recordings")
+        print("----------------------")
+        if queue:
+            for item in queue[:8]:
+                print(
+                    f"{fmt_ts(item['record_start_utc'])} | "
+                    f"{item.get('satellite', '?')} | "
+                    f"{decode_profile_for(item)} | "
+                    f"{item['pass_id']}"
+                )
+        else:
+            print("No future recording jobs are currently queued.")
+
+        print("")
+        print("Upcoming Scanned Passes")
+        print("-----------------------")
+        if passes:
+            for item in passes[:8]:
+                print(
+                    f"{fmt_ts(item['record_start_utc'])} | "
+                    f"{item.get('satellite', '?')} | "
+                    f"{decode_profile_for(item)} | "
+                    f"max el {item.get('max_elevation_deg', '?')} deg | "
+                    f"peak az {item.get('peak_azimuth_label', '?')} | "
+                    f"record {'yes' if item.get('record_enabled', True) else 'no'} | "
+                    f"{item['pass_id']}"
+                )
+        else:
+            print("No passes found in the current lookahead window.")
+
+        print("")
+        print("Next Recording Detail")
+        print("---------------------")
+        if queue:
+            item = queue[0]
+            record_offset_hz = int(sdr.get("record_frequency_offset_hz", 0) or 0)
+            next_frequency_hz = int(item.get("frequency_hz") or 0)
+            print(f"Pass ID                      : {item.get('pass_id', 'n/a')}")
+            print(f"Satellite                    : {item.get('satellite', 'n/a')}")
+            print(f"Decode profile               : {decode_profile_for(item)}")
+            print(f"Record start                 : {fmt_ts(item['record_start_utc'])}")
+            print(f"AOS                          : {fmt_ts(item['aos_utc']) if item.get('aos_utc') else 'n/a'}")
+            print(f"TCA                          : {fmt_ts(item['tca_utc']) if item.get('tca_utc') else 'n/a'}")
+            print(f"LOS                          : {fmt_ts(item['los_utc']) if item.get('los_utc') else 'n/a'}")
+            print(f"Frequency Hz                 : {item.get('frequency_hz', 'n/a')}")
+            print(f"Tuned frequency Hz           : {next_frequency_hz + record_offset_hz if next_frequency_hz else 'n/a'}")
+            print(f"Max elevation deg            : {item.get('max_elevation_deg', 'n/a')}")
+            print(f"Peak azimuth                 : {item.get('peak_azimuth_label', 'n/a')}")
+            print(f"Timeout seconds              : {item.get('timeout_seconds', 'n/a')}")
+        else:
+            print("No queued recordings.")
+        PY
+      register: satelite_watcher_operator_report
+      changed_when: false
+      failed_when: false
+
+    - name: Compute next scheduler run line
+      ansible.builtin.set_fact:
+        satelite_watcher_next_scheduler_run: >-
+          {{
+            (satelite_watcher_timers.stdout_lines[1] | default('unknown'))
+            if (satelite_watcher_timers.stdout_lines | default([]) | length > 1)
+            else 'unknown'
+          }}
+
+    - name: Display Satelite Watcher diagnostics
+      ansible.builtin.debug:
+        msg:
+          satdump_present: "{{ satelite_watcher_bin.stat.exists }}"
+          sdr_probe_rc: "{{ satelite_watcher_sdr_probe.rc | default('not-run') }}"
+          sdr_probe_output: "{{ satelite_watcher_sdr_probe.stdout_lines | default([]) }}"
+          sdr_probe_error: "{{ satelite_watcher_sdr_probe.stderr_lines | default([]) }}"
+          timer_active: "{{ satelite_watcher_timer_active.stdout | default('unknown') }}"
+          timer_enabled: "{{ satelite_watcher_timer_enabled.stdout | default('unknown') }}"
+          next_scheduler_run: "{{ satelite_watcher_next_scheduler_run }}"
+          recent_logs: "{{ satelite_watcher_logs.stdout_lines | default([]) }}"
+          recent_record_logs: "{{ satelite_watcher_record_log_tail.stdout_lines | default([]) }}"
+          file_log_tail: "{{ satelite_watcher_file_log.stdout_lines | default([]) }}"
+
+    - name: Display Satelite Watcher operator report
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            satelite_watcher_operator_report.stdout_lines
+            if (satelite_watcher_operator_report.stdout_lines | default([]) | length > 0)
+            else (satelite_watcher_operator_report.stderr_lines | default([]))
+          }}

@@ -162,6 +162,46 @@
   ansible.builtin.set_fact:
     jellyfin_devices: "{{ [ jellyfin_vaapi_device ~ ':' ~ jellyfin_vaapi_device ] if jellyfin_enable_vaapi else [] }}"
 
+# 6.5) Repair migrations.xml if schema is incompatible
+# Jellyfin 10.9→10.10+ changed the migrations state file root element from
+# <migrations> to <MigrationOptions>. A file with the old schema causes an
+# unhandled XML deserialization crash (exit 139) on every startup.
+# If the backup has the new schema, restore it; otherwise delete the file so
+# Jellyfin generates a clean one from its database on the next start.
+- name: Repair legacy Jellyfin migration state files under the config root
+  ansible.builtin.shell: |
+    set -eu
+    files="$(find "{{ jellyfin_config_dir }}" -maxdepth 3 -type f \( -name migrations.xml -o -name migration.xml \) 2>/dev/null | sort || true)"
+    if [ -z "$files" ]; then
+      echo missing
+      exit 0
+    fi
+    changed=0
+    for MIGFILE in $files; do
+      if [ "$(basename "$MIGFILE")" = "migration.xml" ]; then
+        rm -f "$MIGFILE"
+        changed=1
+        continue
+      fi
+      BACKUP="${MIGFILE}.backup"
+      if grep -q '<migrations' "$MIGFILE"; then
+        if [ -f "$BACKUP" ] && grep -q '<MigrationOptions' "$BACKUP"; then
+          cp "$BACKUP" "$MIGFILE"
+          changed=1
+        else
+          rm -f "$MIGFILE"
+          changed=1
+        fi
+      fi
+    done
+    if [ "$changed" -eq 1 ]; then
+      echo fixed
+    else
+      echo ok
+    fi
+  register: _migrations_fix
+  changed_when: _migrations_fix.stdout == 'fixed'
+
 # 7) Start Jellyfin
 - name: Run Jellyfin container
   community.docker.docker_container:
@@ -179,3 +219,32 @@
     tty: false
     state: started
 
+- name: Find Jellyfin library options
+  ansible.builtin.find:
+    paths:
+      - "{{ jellyfin_config_dir }}/root/default"
+      - "{{ jellyfin_config_dir }}/config/root/default"
+    patterns: options.xml
+    recurse: true
+    file_type: file
+  register: jellyfin_library_options
+  failed_when: false
+  changed_when: false
+  become: true
+
+- name: Keep Jellyfin LUFS scan disabled
+  ansible.builtin.replace:
+    path: "{{ item.path }}"
+    regexp: '<EnableLUFSScan>true</EnableLUFSScan>'
+    replace: '<EnableLUFSScan>false</EnableLUFSScan>'
+  loop: "{{ jellyfin_library_options.files | default([]) }}"
+  register: jellyfin_lufs_scan
+  when: not (jellyfin_enable_lufs_scan | bool)
+  become: true
+
+- name: Restart Jellyfin after LUFS option changes
+  ansible.builtin.command: docker restart jellyfin
+  when:
+    - jellyfin_lufs_scan is defined
+    - jellyfin_lufs_scan is changed
+  become: true

@@ -1,0 +1,5 @@
+# Managed by Ansible: restricted BatchYT update publisher
+Defaults:{{ batchyt_deploy_user }} !lecture
+Defaults:{{ batchyt_deploy_user }} !requiretty
+
+{{ batchyt_deploy_user }} ALL=(root) NOPASSWD: {{ batchyt_deploy_promote_path }} *

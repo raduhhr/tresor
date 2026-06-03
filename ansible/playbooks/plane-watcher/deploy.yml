@@ -1,0 +1,16 @@
+---
+- name: Deploy Plane Watcher
+  hosts: tresor
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Assert Debian family
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family == "Debian"
+        fail_msg: "This playbook currently targets Debian hosts."
+
+  roles:
+    - role: plane_watcher
+      tags: [plane_watcher]

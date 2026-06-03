@@ -1,0 +1,65 @@
+---
+- name: Backup Satelite watcher data
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_root_path: /opt/satelite-watcher
+    satelite_watcher_parent_dir: /opt
+    satelite_watcher_leaf_dir: satelite-watcher
+    satelite_watcher_backup_dir: /mnt/data/files/Backups/satelite-watcher
+    satelite_watcher_backup_retention_days: 30
+    satelite_watcher_backup_include_recordings: false
+
+  tasks:
+    - name: Ensure Satelite Watcher backup directory exists
+      ansible.builtin.file:
+        path: "{{ satelite_watcher_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Check if Satelite Watcher root exists
+      ansible.builtin.stat:
+        path: "{{ satelite_watcher_root_path }}"
+      register: satelite_watcher_root_stat
+
+    - name: Fail if Satelite Watcher root does not exist
+      ansible.builtin.fail:
+        msg: "Satelite Watcher root not found at {{ satelite_watcher_root_path }}. Nothing to back up."
+      when: not satelite_watcher_root_stat.stat.exists
+
+    - name: Create Satelite Watcher backup snapshot
+      ansible.builtin.shell: |
+        set -euo pipefail
+        DATE=$(date +%d%m%Y-%H%M)
+        SNAPSHOT="{{ satelite_watcher_backup_dir }}/satelite-watcher-backup-$DATE.tar.gz"
+        if {{ 'true' if satelite_watcher_backup_include_recordings | bool else 'false' }}; then
+          tar -czf "$SNAPSHOT" -C "{{ satelite_watcher_parent_dir }}" "{{ satelite_watcher_leaf_dir }}"
+        else
+          tar --exclude="{{ satelite_watcher_leaf_dir }}/recordings" -czf "$SNAPSHOT" -C "{{ satelite_watcher_parent_dir }}" "{{ satelite_watcher_leaf_dir }}"
+        fi
+        echo "$SNAPSHOT"
+      register: satelite_watcher_backup_snapshot
+      changed_when: true
+
+    - name: Delete old Satelite Watcher backups
+      ansible.builtin.find:
+        paths: "{{ satelite_watcher_backup_dir }}"
+        patterns: "satelite-watcher-backup-*.tar.gz"
+        age: "{{ satelite_watcher_backup_retention_days }}d"
+      register: satelite_watcher_old_backups
+
+    - name: Remove expired Satelite Watcher backups
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ satelite_watcher_old_backups.files }}"
+
+    - name: Show Satelite Watcher backup result
+      ansible.builtin.debug:
+        msg:
+          backup_file: "{{ satelite_watcher_backup_snapshot.stdout | trim }}"
+          include_recordings: "{{ satelite_watcher_backup_include_recordings | bool }}"

@@ -1,0 +1,16 @@
+# Managed by Ansible: nginx-music role / {{ nginx_vot_config_name }} (HTTP bootstrap)
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name {{ nginx_vot_domain }}{% for alias in nginx_vot_aliases | default([]) %} {{ alias }}{% endfor %};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  location / {
+    default_type text/plain;
+    return 200 "{{ nginx_vot_domain }} bootstrap OK\n";
+  }
+}

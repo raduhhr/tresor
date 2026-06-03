@@ -1,0 +1,6 @@
+[Unit]
+# Some containers bind to fixed host IPs (for example 192.0.2.10:8096).
+# Waiting for network-online avoids boot races where Docker starts before the
+# LAN address is fully available and those containers enter restart loops.
+Wants=network-online.target
+After=network-online.target

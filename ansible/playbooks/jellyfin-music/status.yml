@@ -1,5 +1,5 @@
 ---
-- name: "Jellyfin Music status (WG-bound, probe on bind addr)"
+- name: "Jellyfin Media status (WG-bound, probe on bind addr)"
   hosts: tresor
   become: true
   gather_facts: false
@@ -17,16 +17,16 @@
       register: _ci
       changed_when: false
 
-    - name: Note when Jellyfin Music is disabled
+    - name: Note when Jellyfin Media is disabled
       ansible.builtin.debug:
-        msg: "Jellyfin Music is disabled for this host; skipping runtime checks."
+        msg: "Jellyfin Media is disabled for this host; skipping runtime checks."
       when: not jm_enabled
 
     - name: Assert container absent when disabled
       ansible.builtin.assert:
         that:
           - not _ci.exists
-        fail_msg: "Jellyfin Music is disabled but the container exists."
+        fail_msg: "Jellyfin Media is disabled but the container exists."
       when: not jm_enabled
 
     - name: Assert container is running
@@ -35,10 +35,10 @@
           - _ci.exists
           - _ci.container.State.Running
           - _ci.container.State.ExitCode == 0
-        fail_msg: "Jellyfin Music container not healthy or not running."
+        fail_msg: "Jellyfin Media container not healthy or not running."
       when: jm_enabled
 
-    - name: Probe Jellyfin Music web UI
+    - name: Probe Jellyfin Media web UI
       ansible.builtin.uri:
         url: "http://{{ jm_bind_addr }}:{{ jm_port }}/web/index.html"
         status_code: 200

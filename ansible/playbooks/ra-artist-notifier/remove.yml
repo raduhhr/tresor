@@ -1,0 +1,30 @@
+---
+- name: Remove Resident Advisor artist event notifier
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop and disable timer
+      ansible.builtin.systemd:
+        name: ra-artist-notifier.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove systemd units
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/ra-artist-notifier.service
+        - /etc/systemd/system/ra-artist-notifier.timer
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Remove app dir
+      ansible.builtin.file:
+        path: /opt/ra-artist-notifier
+        state: absent

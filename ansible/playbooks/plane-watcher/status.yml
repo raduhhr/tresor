@@ -1,0 +1,126 @@
+---
+- name: Plane Watcher status
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    plane_watcher_config_file: /mnt/ssd/configs/plane-watcher/config.yml
+    plane_watcher_container_name: plane-watcher
+
+  tasks:
+    - name: Check Plane Watcher config file
+      ansible.builtin.stat:
+        path: "{{ plane_watcher_config_file }}"
+      register: plane_watcher_config_stat
+
+    - name: Read Plane Watcher config file
+      ansible.builtin.slurp:
+        path: "{{ plane_watcher_config_file }}"
+      register: plane_watcher_config_raw
+      when: plane_watcher_config_stat.stat.exists
+
+    - name: Parse Plane Watcher config
+      ansible.builtin.set_fact:
+        plane_watcher_config: "{{ plane_watcher_config_raw.content | b64decode | from_yaml }}"
+      when: plane_watcher_config_stat.stat.exists
+
+    - name: Determine whether Plane Watcher should expose a host listener
+      ansible.builtin.set_fact:
+        plane_watcher_listener_expected: >-
+          {{
+            not (
+              plane_watcher_config is defined
+              and plane_watcher_config.docker is defined
+              and plane_watcher_config.docker.traefik is defined
+              and (plane_watcher_config.docker.traefik.enabled | default(false))
+            )
+          }}
+      when: plane_watcher_config_stat.stat.exists
+
+    - name: Default Plane Watcher listener expectation when config is missing
+      ansible.builtin.set_fact:
+        plane_watcher_listener_expected: true
+      when: not (plane_watcher_config_stat.stat.exists | default(false))
+
+    - name: Inspect Plane Watcher container
+      community.docker.docker_container_info:
+        name: "{{ plane_watcher_container_name }}"
+      register: plane_watcher_container_info
+      changed_when: false
+      failed_when: false
+
+    - name: Tail Plane Watcher logs
+      ansible.builtin.command:
+        argv:
+          - docker
+          - logs
+          - --tail
+          - "40"
+          - "{{ plane_watcher_container_name }}"
+      register: plane_watcher_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Derive Plane Watcher effective gain hints from logs
+      ansible.builtin.set_fact:
+        plane_watcher_gain_line: >-
+          {{
+            (
+              (
+                plane_watcher_logs.stdout_lines | default([])
+              )
+              | select('search', 'tuner gain set to|--gain=')
+              | list
+              | last
+            )
+            | default('n/a', true)
+          }}
+
+    - name: Check Plane Watcher UI listener
+      ansible.builtin.shell: "ss -ltn | grep -F ':{{ (plane_watcher_config.ui.port if (plane_watcher_config is defined and plane_watcher_config.ui is defined) else 8083) }} '"
+      register: plane_watcher_listener
+      changed_when: false
+      failed_when: false
+
+    - name: Display Plane Watcher diagnostics
+      ansible.builtin.debug:
+        msg:
+          config_present: "{{ plane_watcher_config_stat.stat.exists | default(false) }}"
+          container_exists: "{{ plane_watcher_container_info.exists | default(false) }}"
+          container_running: "{{ plane_watcher_container_info.container.State.Running | default(false) if (plane_watcher_container_info.exists | default(false)) else false }}"
+          listener_expected: "{{ plane_watcher_listener_expected | default(true) }}"
+          ui_listener_rc: "{{ plane_watcher_listener.rc | default(1) }}"
+          container_image: "{{ plane_watcher_container_info.container.Config.Image | default('unknown') if (plane_watcher_container_info.exists | default(false)) else 'missing' }}"
+          configured_gain: "{{ plane_watcher_config.sdr.gain if (plane_watcher_config is defined and plane_watcher_config.sdr is defined) else 'n/a' }}"
+          effective_gain_hint: "{{ plane_watcher_gain_line | default('n/a') }}"
+          logs_tail: "{{ plane_watcher_logs.stdout_lines | default([]) }}"
+
+    - name: Display Plane Watcher operator report
+      ansible.builtin.debug:
+        msg:
+          - ""
+          - "========================================"
+          - "PLANE WATCHER STATUS"
+          - "========================================"
+          - "Container exists              : {{ plane_watcher_container_info.exists | default(false) }}"
+          - "Container running             : {{ plane_watcher_container_info.container.State.Running | default(false) if (plane_watcher_container_info.exists | default(false)) else false }}"
+          - "Config present                : {{ plane_watcher_config_stat.stat.exists | default(false) }}"
+          - "Container name                : {{ plane_watcher_config.runtime.container_name if (plane_watcher_config is defined and plane_watcher_config.runtime is defined) else plane_watcher_container_name }}"
+          - "Ultrafeeder image             : {{ plane_watcher_config.ultrafeeder.image if (plane_watcher_config is defined and plane_watcher_config.ultrafeeder is defined) else 'n/a' }}"
+          - "UI URL                        : {{ plane_watcher_config.ui.url if (plane_watcher_config is defined and plane_watcher_config.ui is defined) else 'n/a' }}"
+          - "UI listener expected          : {{ 'yes' if (plane_watcher_listener_expected | default(true)) else 'no (Traefik/tunnel managed)' }}"
+          - "UI listener detected          : {{ 'yes' if (plane_watcher_listener.rc | default(1)) == 0 else 'no' }}"
+          - "Traefik enabled               : {{ plane_watcher_config.docker.traefik.enabled if (plane_watcher_config is defined and plane_watcher_config.docker is defined and plane_watcher_config.docker.traefik is defined) else 'n/a' }}"
+          - "Public host                   : {{ plane_watcher_config.docker.traefik.public_host if (plane_watcher_config is defined and plane_watcher_config.docker is defined and plane_watcher_config.docker.traefik is defined) else 'n/a' }}"
+          - "SDR device serial             : {{ plane_watcher_config.sdr.device_serial if (plane_watcher_config is defined and plane_watcher_config.sdr is defined) else 'n/a' }}"
+          - "READSB gain (configured)      : {{ plane_watcher_config.sdr.gain if (plane_watcher_config is defined and plane_watcher_config.sdr is defined) else 'n/a' }}"
+          - "READSB gain (live hint)       : {{ plane_watcher_gain_line | default('n/a') }}"
+          - "Location                      : {{ (plane_watcher_config.location.latitude | string) if (plane_watcher_config is defined and plane_watcher_config.location is defined) else 'n/a' }}, {{ (plane_watcher_config.location.longitude | string) if (plane_watcher_config is defined and plane_watcher_config.location is defined) else 'n/a' }}"
+          - "Altitude m                    : {{ plane_watcher_config.location.altitude_m if (plane_watcher_config is defined and plane_watcher_config.location is defined) else 'n/a' }}"
+          - "Timezone                      : {{ plane_watcher_config.location.timezone if (plane_watcher_config is defined and plane_watcher_config.location is defined) else 'n/a' }}"
+          - "Satelite recording paused     : {{ plane_watcher_config.runtime.satelite_watcher_recording_paused if (plane_watcher_config is defined and plane_watcher_config.runtime is defined) else 'n/a' }}"
+          - ""
+          - "Docker"
+          - "------"
+          - "{{ (plane_watcher_container_info.container.Name | default('missing')) if (plane_watcher_container_info.exists | default(false)) else 'No plane-watcher container found.' }}"

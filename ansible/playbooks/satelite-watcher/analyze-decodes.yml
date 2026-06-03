@@ -1,0 +1,210 @@
+---
+- name: Analyze Satelite Watcher decode outputs
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_analyze_config_file: /opt/satelite-watcher/config/config.yml
+    satelite_watcher_analyze_match: "{{ run_match | default('*') }}"
+    satelite_watcher_analyze_limit: "{{ limit | default(0) }}"
+
+  tasks:
+    - name: Read deployed Satelite Watcher config
+      ansible.builtin.slurp:
+        src: "{{ satelite_watcher_analyze_config_file }}"
+      register: satelite_watcher_analyze_config_raw
+
+    - name: Parse deployed Satelite Watcher config
+      ansible.builtin.set_fact:
+        satelite_watcher_analyze_config: "{{ satelite_watcher_analyze_config_raw.content | b64decode | from_yaml }}"
+
+    - name: Analyze decoded run folders
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        import os
+        import re
+        from pathlib import Path
+
+        output_root = Path(os.environ["SATELITE_WATCHER_OUTPUT_ROOT"])
+        run_match = os.environ["SATELITE_WATCHER_RUN_MATCH"]
+        limit = int(os.environ["SATELITE_WATCHER_LIMIT"])
+        decode_dir_name = os.environ["SATELITE_WATCHER_DECODE_DIR_NAME"]
+        images_dir_name = os.environ["SATELITE_WATCHER_IMAGES_DIR_NAME"]
+        image_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+
+        def files(path, suffixes=None):
+            if not path.exists():
+                return []
+            found = []
+            for child in sorted(path.rglob("*")):
+                if not child.is_file():
+                    continue
+                if suffixes and child.suffix.lower() not in suffixes:
+                    continue
+                found.append(child)
+            return found
+
+        def read_text(path):
+            try:
+                return path.read_text(encoding="utf-8", errors="replace")
+            except FileNotFoundError:
+                return ""
+
+        def last_line_value(text, pattern):
+            matches = re.findall(pattern, text)
+            return matches[-1].strip() if matches else ""
+
+        def max_float(text, pattern):
+            values = []
+            for match in re.finditer(pattern, text):
+                try:
+                    values.append(float(match.group(1)))
+                except ValueError:
+                    pass
+            return max(values) if values else None
+
+        run_dirs = []
+        for month_dir in sorted(output_root.glob("*")):
+            if not month_dir.is_dir():
+                continue
+            for day_dir in sorted(month_dir.glob("*")):
+                if not day_dir.is_dir():
+                    continue
+                for run_dir in sorted(day_dir.glob(run_match)):
+                    if run_dir.is_dir():
+                        run_dirs.append(run_dir)
+
+        if limit > 0:
+            run_dirs = run_dirs[-limit:]
+
+        def decode_variant_dirs(run_dir):
+            default_dir = run_dir / decode_dir_name
+            variants = []
+            if default_dir.exists():
+                variants.append(default_dir)
+            for child in sorted(run_dir.glob(f"{decode_dir_name}_*")):
+                if child.is_dir() and child not in variants:
+                    variants.append(child)
+            if not variants:
+                variants.append(default_dir)
+            return variants
+
+        def images_dir_for(run_dir, decode_dir):
+            if decode_dir.name == decode_dir_name:
+                return run_dir / images_dir_name
+            suffix = decode_dir.name[len(decode_dir_name):]
+            return run_dir / f"{images_dir_name}{suffix}"
+
+        results = []
+        for run_dir in run_dirs:
+            metadata_file = run_dir / "metadata.json"
+            metadata = {}
+            if metadata_file.exists():
+                try:
+                    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    metadata = {}
+
+            for decode_dir in decode_variant_dirs(run_dir):
+                images_dir = images_dir_for(run_dir, decode_dir)
+                if decode_dir.name == decode_dir_name:
+                    log_file = run_dir / "satdump-decode.log"
+                else:
+                    log_file = run_dir / f"satdump-decode{decode_dir.name[len(decode_dir_name):]}.log"
+                    if not log_file.exists():
+                        log_file = run_dir / "satdump-decode.log"
+
+                log_text = read_text(log_file)
+                decode_files = files(decode_dir)
+                image_files = files(images_dir, image_exts) + files(decode_dir, image_exts)
+                cadu_files = files(decode_dir, {".cadu"})
+                soft_files = files(decode_dir, {".soft"})
+                product_files = [path for path in files(decode_dir) if path.name == "product.cbor"]
+                dataset_files = [path for path in files(decode_dir) if path.name == "dataset.json"]
+                telemetry_files = [path for path in files(decode_dir) if path.name == "telemetry.json"]
+
+                msu_lines = {}
+                for channel, count in re.findall(r"MSU-MR Channel\s+(\d+)\s+Lines\s+:\s+(\d+)", log_text):
+                    msu_lines[channel] = int(count)
+                usable_lines = sum(msu_lines.values())
+                has_nosync = "NOSYNC" in log_text
+                has_sync = "SYNCED" in log_text or "LOCK" in log_text
+                max_snr = max_float(log_text, r"Peak SNR:\s*([-+0-9.]+)dB")
+                last_ber = last_line_value(log_text, r"BER\s*:\s*([0-9.]+)")
+                pipeline_from_log = last_line_value(log_text, r"Starting processing pipeline\s+([^\s.]+)")
+
+                if image_files:
+                    diagnosis = "image files exist"
+                elif usable_lines > 0:
+                    diagnosis = "decoded image lines exist but no image files were emitted"
+                elif log_file.exists() and has_nosync:
+                    diagnosis = "SatDump did not lock onto LRPT frames"
+                elif product_files and not log_file.exists():
+                    diagnosis = "decoded products exist, but no SatDump log is available for line/sync analysis"
+                elif decode_files:
+                    diagnosis = "decoded files exist, but no image products were emitted"
+                else:
+                    diagnosis = "no decoded files found"
+
+                results.append({
+                    "run": str(run_dir),
+                    "decode_variant": decode_dir.name,
+                    "raw_file": metadata.get("raw_file") or metadata.get("expected_output_file") or "",
+                    "pipeline": pipeline_from_log or metadata.get("pipeline", ""),
+                    "source_mode": metadata.get("source_mode", ""),
+                    "dc_block": metadata.get("dc_block", ""),
+                    "iq_swap": metadata.get("iq_swap", ""),
+                    "freq_shift": metadata.get("freq_shift", ""),
+                    "decode_files": len(decode_files),
+                    "cadu_files": [str(path) for path in cadu_files],
+                    "soft_files": [str(path) for path in soft_files],
+                    "product_files": [str(path) for path in product_files],
+                    "dataset_files": [str(path) for path in dataset_files],
+                    "telemetry_files": [str(path) for path in telemetry_files],
+                    "image_files": [str(path) for path in image_files],
+                    "msu_lines": msu_lines,
+                    "usable_msu_lines": usable_lines,
+                    "nosync_seen": has_nosync,
+                    "sync_hint_seen": has_sync,
+                    "max_peak_snr_db": max_snr,
+                    "last_ber": last_ber,
+                    "log_file": str(log_file) if log_file.exists() else "",
+                    "diagnosis": diagnosis,
+                })
+
+        summary = {
+            "run_count": len(results),
+            "runs_with_images": sum(1 for item in results if item["image_files"]),
+            "runs_with_msu_lines": sum(1 for item in results if item["usable_msu_lines"] > 0),
+            "runs_with_nosync": sum(1 for item in results if item["nosync_seen"]),
+            "runs": results,
+        }
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        SATELITE_WATCHER_OUTPUT_ROOT: "{{ satelite_watcher_analyze_config.paths.output_base_dir | default(satelite_watcher_analyze_config.paths.recordings_dir) }}"
+        SATELITE_WATCHER_RUN_MATCH: "{{ satelite_watcher_analyze_match }}"
+        SATELITE_WATCHER_LIMIT: "{{ satelite_watcher_analyze_limit | string }}"
+        SATELITE_WATCHER_DECODE_DIR_NAME: "{{ satelite_watcher_analyze_config.get('decode', {}).get('satelite_watcher_after_record', {}).get('output_dir_name', 'decoded') }}"
+        SATELITE_WATCHER_IMAGES_DIR_NAME: "{{ satelite_watcher_analyze_config.get('decode', {}).get('image_after_decode', {}).get('output_dir_name', 'images') }}"
+      register: satelite_watcher_analyze_result
+      changed_when: false
+
+    - name: Parse decode analysis result
+      ansible.builtin.set_fact:
+        satelite_watcher_analyze_summary: "{{ satelite_watcher_analyze_result.stdout | from_json }}"
+
+    - name: Display decode analysis summary
+      ansible.builtin.debug:
+        msg:
+          runs: "{{ satelite_watcher_analyze_summary.run_count }}"
+          runs_with_images: "{{ satelite_watcher_analyze_summary.runs_with_images }}"
+          runs_with_msu_lines: "{{ satelite_watcher_analyze_summary.runs_with_msu_lines }}"
+          runs_with_nosync: "{{ satelite_watcher_analyze_summary.runs_with_nosync }}"
+          diagnoses: "{{ satelite_watcher_analyze_summary.runs | map(attribute='diagnosis') | list }}"
+          details: "{{ satelite_watcher_analyze_summary.runs }}"

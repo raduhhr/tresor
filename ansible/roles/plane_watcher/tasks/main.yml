@@ -1,0 +1,183 @@
+---
+- name: End host if Plane Watcher is disabled
+  ansible.builtin.meta: end_host
+  when: not plane_watcher_enabled | bool
+
+- name: Assert required Plane Watcher settings
+  ansible.builtin.assert:
+    that:
+      - plane_watcher_location_latitude is number
+      - plane_watcher_location_longitude is number
+      - plane_watcher_location_altitude_m is number
+      - not (plane_watcher_expose_host_port | bool) or plane_watcher_host_port | int > 0
+      - not (plane_watcher_expose_host_port | bool) or plane_watcher_bind_addr | string | length > 0
+      - not (plane_watcher_enable_traefik | bool) or plane_watcher_public_host | string | length > 0
+      - plane_watcher_sdr_device_serial | string | length > 0
+      - plane_watcher_image | string | length > 0
+    fail_msg: Plane Watcher vars are incomplete for Ultrafeeder deployment.
+
+- name: Ensure Plane Watcher directory tree exists
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ plane_watcher_config_dir }}"
+    - "{{ plane_watcher_data_dir }}"
+    - "{{ plane_watcher_globe_history_dir }}"
+    - "{{ plane_watcher_graphs1090_dir }}"
+
+- name: Render Plane Watcher config
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ plane_watcher_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - restart plane watcher container
+
+- name: Build Plane Watcher docker networks list
+  ansible.builtin.set_fact:
+    _plane_watcher_network_names: >-
+      {{
+        ([plane_watcher_network_primary] if (plane_watcher_network_primary | length > 0) else [])
+        + ([plane_watcher_network_publish] if (plane_watcher_network_publish | length > 0) else [])
+      }}
+
+- name: Gather info for each Plane Watcher Docker network
+  community.docker.docker_network_info:
+    name: "{{ item }}"
+  loop: "{{ _plane_watcher_network_names }}"
+  register: _plane_watcher_network_info
+  when: _plane_watcher_network_names | length > 0
+
+- name: Fail if a Plane Watcher Docker network is missing
+  ansible.builtin.fail:
+    msg: "Docker network '{{ item.item }}' is missing. Run setup-networks.yml first."
+  when:
+    - _plane_watcher_network_names | length > 0
+    - not (item.exists | default(false))
+  loop: "{{ _plane_watcher_network_info.results | default([]) }}"
+
+- name: Compute whether Plane Watcher has a non-internal network
+  ansible.builtin.set_fact:
+    _plane_watcher_any_non_internal: "{{ (_plane_watcher_network_info.results | default([])) | selectattr('network.Internal','defined') | selectattr('network.Internal','equalto', false) | list | length > 0 }}"
+  when: _plane_watcher_network_names | length > 0
+
+- name: Assert Plane Watcher can publish a host port
+  ansible.builtin.assert:
+    that: _plane_watcher_any_non_internal | default(false)
+    fail_msg: >-
+      All referenced Plane Watcher networks are internal. Docker will not bind
+      {{ plane_watcher_bind_addr }}:{{ plane_watcher_host_port }}.
+  when:
+    - plane_watcher_expose_host_port | bool
+    - _plane_watcher_network_names | length > 0
+
+- name: Convert Plane Watcher network names to container payload
+  ansible.builtin.set_fact:
+    _plane_watcher_networks: "{{ _plane_watcher_network_names | map('regex_replace','^(.*)$','{\"name\": \"\\1\"}') | map('from_yaml') | list }}"
+  when: _plane_watcher_network_names | length > 0
+
+- name: Build Plane Watcher Traefik labels
+  ansible.builtin.set_fact:
+    _plane_watcher_labels:
+      traefik.enable: "true"
+      traefik.http.routers.plane-watcher.rule: "Host(`{{ plane_watcher_public_host }}`)"
+      traefik.http.routers.plane-watcher.entrypoints: "{{ plane_watcher_traefik_entrypoint }}"
+      traefik.http.services.plane-watcher.loadbalancer.server.port: "{{ plane_watcher_container_port | string }}"
+  when: plane_watcher_enable_traefik | bool
+
+- name: Add optional Plane Watcher Traefik middlewares
+  ansible.builtin.set_fact:
+    _plane_watcher_labels: "{{ _plane_watcher_labels | combine({'traefik.http.routers.plane-watcher.middlewares': plane_watcher_traefik_middlewares}) }}"
+  when:
+    - plane_watcher_enable_traefik | bool
+    - plane_watcher_traefik_middlewares | string | length > 0
+
+- name: Build Plane Watcher labels when Traefik is disabled
+  ansible.builtin.set_fact:
+    _plane_watcher_labels:
+      traefik.enable: "false"
+  when: not (plane_watcher_enable_traefik | bool)
+
+- name: Check if Plane Watcher container exists
+  community.docker.docker_container_info:
+    name: "{{ plane_watcher_container_name }}"
+  register: _plane_watcher_container_info
+  failed_when: false
+  changed_when: false
+
+- name: Ensure Plane Watcher host port is free on first run
+  ansible.builtin.shell: "ss -tln | awk '$4 ~ /:{{ plane_watcher_host_port }}$/ { print }' | wc -l"
+  register: _plane_watcher_port_check
+  changed_when: false
+  failed_when: false
+  when: not (_plane_watcher_container_info.exists | default(false)) or not (_plane_watcher_container_info.container.State.Running | default(false))
+
+- name: Fail if Plane Watcher host port is already in use
+  ansible.builtin.assert:
+    that: "{{ (_plane_watcher_port_check.stdout | default('0')) | int == 0 }}"
+    fail_msg: "Port {{ plane_watcher_host_port }} already in use on host."
+  when:
+    - plane_watcher_expose_host_port | bool
+    - not (_plane_watcher_container_info.exists | default(false)) or not (_plane_watcher_container_info.container.State.Running | default(false))
+
+- name: Build Plane Watcher container environment
+  ansible.builtin.set_fact:
+    _plane_watcher_env:
+      LOGLEVEL: "{{ plane_watcher_loglevel }}"
+      TZ: "{{ plane_watcher_timezone }}"
+      READSB_DEVICE_TYPE: "{{ plane_watcher_sdr_device_type }}"
+      READSB_GAIN: "{{ plane_watcher_readsb_gain | string }}"
+      READSB_RTLSDR_DEVICE: "{{ plane_watcher_sdr_device_serial }}"
+      READSB_LAT: "{{ plane_watcher_location_latitude | string }}"
+      READSB_LON: "{{ plane_watcher_location_longitude | string }}"
+      READSB_ALT: "{{ plane_watcher_location_altitude_m }}m"
+      READSB_RX_LOCATION_ACCURACY: "2"
+      READSB_STATS_RANGE: "{{ 'true' if plane_watcher_readsb_stats_range | bool else 'false' }}"
+      ULTRAFEEDER_CONFIG: "{{ plane_watcher_ultrafeeder_config }}"
+      UPDATE_TAR1090: "true"
+      TAR1090_PAGETITLE: "{{ plane_watcher_tar1090_page_title }}"
+      TAR1090_DISPLAYUNITS: "{{ plane_watcher_tar1090_display_units }}"
+      TAR1090_ENABLE_AC_DB: "{{ 'true' if plane_watcher_tar1090_enable_ac_db | bool else 'false' }}"
+      TAR1090_FLIGHTAWARELINKS: "{{ 'true' if plane_watcher_tar1090_flightaware_links | bool else 'false' }}"
+      TAR1090_SITESHOW: "{{ 'true' if plane_watcher_tar1090_site_show | bool else 'false' }}"
+      TAR1090_PLANECOUNTINTITLE: "{{ 'true' if plane_watcher_tar1090_planecount_in_title | bool else 'false' }}"
+      TAR1090_MESSAGERATEINTITLE: "{{ 'true' if plane_watcher_tar1090_message_rate_in_title | bool else 'false' }}"
+      TAR1090_DEFAULTCENTERLAT: "{{ plane_watcher_location_latitude | string }}"
+      TAR1090_DEFAULTCENTERLON: "{{ plane_watcher_location_longitude | string }}"
+      GRAPHS1090_DARKMODE: "{{ 'true' if plane_watcher_graphs1090_dark_mode | bool else 'false' }}"
+      PROMETHEUS_ENABLE: "{{ 'true' if plane_watcher_prometheus_enable | bool else 'false' }}"
+
+- name: Add optional READSB ppm override
+  ansible.builtin.set_fact:
+    _plane_watcher_env: "{{ _plane_watcher_env | combine({'READSB_RTLSDR_PPM': plane_watcher_readsb_ppm | string}) }}"
+  when: plane_watcher_readsb_ppm | string | length > 0
+
+- name: Run Plane Watcher container
+  community.docker.docker_container:
+    name: "{{ plane_watcher_container_name }}"
+    image: "{{ plane_watcher_image }}"
+    pull: true
+    restart_policy: unless-stopped
+    comparisons:
+      networks: strict
+    networks: "{{ _plane_watcher_networks | default([]) }}"
+    published_ports: "{{ [plane_watcher_bind_addr ~ ':' ~ (plane_watcher_host_port | string) ~ ':' ~ (plane_watcher_container_port | string)] if (plane_watcher_expose_host_port | bool) else omit }}"
+    labels: "{{ _plane_watcher_labels }}"
+    env: "{{ _plane_watcher_env }}"
+    volumes:
+      - "{{ plane_watcher_globe_history_dir }}:/var/globe_history"
+      - "{{ plane_watcher_graphs1090_dir }}:/var/lib/collectd"
+      - /proc/diskstats:/proc/diskstats:ro
+      - /dev/bus/usb:/dev/bus/usb:rw
+      - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - /run:exec,size=256M
+    device_cgroup_rules:
+      - "c 189:* rwm"
+    state: started

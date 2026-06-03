@@ -1,0 +1,164 @@
+---
+- name: "[vot-fe deploy] Install runtime packages"
+  ansible.builtin.apt:
+    name:
+      - nodejs
+      - rsync
+      - sudo
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: "[vot-fe deploy] Ensure runtime group exists"
+  ansible.builtin.group:
+    name: "{{ vot_fe_runtime_group }}"
+    system: true
+    state: present
+
+- name: "[vot-fe deploy] Ensure runtime user exists"
+  ansible.builtin.user:
+    name: "{{ vot_fe_runtime_user }}"
+    group: "{{ vot_fe_runtime_group }}"
+    home: "{{ vot_fe_root }}"
+    shell: /usr/sbin/nologin
+    create_home: false
+    system: true
+    password: "!"
+    state: present
+
+- name: "[vot-fe deploy] Ensure deploy group exists"
+  ansible.builtin.group:
+    name: "{{ vot_fe_deploy_group }}"
+    system: true
+    state: present
+
+- name: "[vot-fe deploy] Ensure deploy user exists"
+  ansible.builtin.user:
+    name: "{{ vot_fe_deploy_user }}"
+    group: "{{ vot_fe_deploy_group }}"
+    home: "{{ vot_fe_deploy_home }}"
+    shell: /bin/bash
+    create_home: true
+    system: true
+    password: "!"
+    state: present
+
+- name: "[vot-fe deploy] Ensure deploy home permissions"
+  ansible.builtin.file:
+    path: "{{ vot_fe_deploy_home }}"
+    state: directory
+    owner: "{{ vot_fe_deploy_user }}"
+    group: "{{ vot_fe_deploy_group }}"
+    mode: "0750"
+
+- name: "[vot-fe deploy] Ensure Ansible remote tmp exists for deploy user checks"
+  ansible.builtin.file:
+    path: "{{ vot_fe_deploy_home }}/.ansible/tmp"
+    state: directory
+    owner: "{{ vot_fe_deploy_user }}"
+    group: "{{ vot_fe_deploy_group }}"
+    mode: "0700"
+
+- name: "[vot-fe deploy] Ensure app directories exist"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ vot_fe_root }}"
+      owner: root
+      group: "{{ vot_fe_runtime_group }}"
+      mode: "0755"
+    - path: "{{ vot_fe_releases_root }}"
+      owner: root
+      group: "{{ vot_fe_runtime_group }}"
+      mode: "0755"
+    - path: "{{ vot_fe_staging_root }}"
+      owner: "{{ vot_fe_deploy_user }}"
+      group: "{{ vot_fe_deploy_group }}"
+      mode: "0750"
+
+- name: "[vot-fe deploy] Install environment file"
+  ansible.builtin.template:
+    src: vot-fe.env.j2
+    dest: "{{ vot_fe_env_path }}"
+    owner: root
+    group: "{{ vot_fe_runtime_group }}"
+    mode: "0640"
+
+- name: "[vot-fe deploy] Install systemd service"
+  ansible.builtin.template:
+    src: vot-fe.service.j2
+    dest: "/etc/systemd/system/{{ vot_fe_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: _vot_fe_service
+
+- name: "[vot-fe deploy] Reload systemd"
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: _vot_fe_service.changed
+
+- name: "[vot-fe deploy] Enable service"
+  ansible.builtin.systemd:
+    name: "{{ vot_fe_service_name }}"
+    enabled: true
+
+- name: "[vot-fe deploy] Check whether an app release is active"
+  ansible.builtin.stat:
+    path: "{{ vot_fe_current_path }}/dist/server/entry.mjs"
+  register: _vot_fe_active_release
+
+- name: "[vot-fe deploy] Restart service when active release exists"
+  ansible.builtin.systemd:
+    name: "{{ vot_fe_service_name }}"
+    state: restarted
+  when:
+    - _vot_fe_active_release.stat.exists | bool
+    - _vot_fe_service.changed
+
+- name: "[vot-fe deploy] Install promote script"
+  ansible.builtin.template:
+    src: vot-fe-promote.sh.j2
+    dest: "{{ vot_fe_promote_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "[vot-fe deploy] Install restricted sudoers rule"
+  ansible.builtin.template:
+    src: sudoers-vot-fe-deploy.j2
+    dest: "{{ vot_fe_sudoers_path }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: "[vot-fe deploy] Install authorized deploy keys"
+  ansible.posix.authorized_key:
+    user: "{{ vot_fe_deploy_user }}"
+    key: "{{ item }}"
+    state: present
+    exclusive: false
+  loop: "{{ vot_fe_deploy_authorized_keys }}"
+  no_log: true
+  when: vot_fe_deploy_authorized_keys | length > 0
+
+- name: "[vot-fe deploy] Check sudo rule for deploy user"
+  ansible.builtin.command:
+    cmd: "sudo -l -U {{ vot_fe_deploy_user }}"
+  changed_when: false
+  register: _vot_fe_deploy_sudo_list
+
+- name: "[vot-fe deploy] Show deploy readiness"
+  ansible.builtin.debug:
+    msg:
+      - "User: {{ vot_fe_deploy_user }}"
+      - "Staging: {{ vot_fe_staging_root }}"
+      - "Current release: {{ vot_fe_current_path }}"
+      - "Service: {{ vot_fe_service_name }}"
+      - "Promote command: sudo {{ vot_fe_promote_path }} <staging-dir>"
+      - "Authorized keys installed: {{ vot_fe_deploy_authorized_keys | length }}"

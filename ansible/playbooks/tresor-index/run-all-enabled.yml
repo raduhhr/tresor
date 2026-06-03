@@ -1,0 +1,11 @@
+---
+- name: Run all enabled Tresor Index sources once
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Run all enabled Tresor Index sources once
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: run-all-enabled

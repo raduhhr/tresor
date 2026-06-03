@@ -1,0 +1,161 @@
+---
+# Publishes already-built BatchYTDownloader update artifacts to tresor-vps.
+#
+# Controller source folder defaults to /batchyt-dist, mounted by compose.yaml:
+#   S:/PROJECTS/batch-yt-downloader/dist/installer -> /batchyt-dist
+#
+# Expected source files:
+#   /batchyt-dist/BatchYTDownloaderSetup.exe
+#   /batchyt-dist/update.json
+#
+# Remote/public location:
+#   /var/www/updates.raduhhr.xyz/batchyt/BatchYTDownloaderSetup.exe
+#   /var/www/updates.raduhhr.xyz/batchyt/update.json
+
+- name: "VPS | publish BatchYTDownloader update artifacts"
+  hosts: vps
+  gather_facts: false
+  become: true
+
+  vars:
+    batchyt_release_src_dir: "{{ lookup('env', 'BATCHYT_DIST_DIR') | default('/batchyt-dist', true) }}"
+    batchyt_remote_dir: "/var/www/updates.raduhhr.xyz/batchyt"
+    batchyt_remote_owner: "ansible"
+    batchyt_remote_group: "www-data"
+    batchyt_installer_name: "BatchYTDownloaderSetup.exe"
+    batchyt_manifest_name: "update.json"
+    batchyt_manifest_url: "https://updates.raduhhr.xyz/batchyt/update.json"
+    batchyt_installer_url: "https://updates.raduhhr.xyz/batchyt/BatchYTDownloaderSetup.exe"
+    batchyt_verify_public_urls: true
+
+  pre_tasks:
+    - name: "[batchyt] Stat local installer"
+      become: false
+      delegate_to: localhost
+      ansible.builtin.stat:
+        path: "{{ batchyt_release_src_dir }}/{{ batchyt_installer_name }}"
+        checksum_algorithm: sha256
+      register: _batchyt_local_installer
+
+    - name: "[batchyt] Stat local manifest"
+      become: false
+      delegate_to: localhost
+      ansible.builtin.stat:
+        path: "{{ batchyt_release_src_dir }}/{{ batchyt_manifest_name }}"
+      register: _batchyt_local_manifest
+
+    - name: "[batchyt] Assert release artifacts exist on the controller"
+      ansible.builtin.assert:
+        that:
+          - _batchyt_local_installer.stat.exists | bool
+          - _batchyt_local_manifest.stat.exists | bool
+        fail_msg: >-
+          Missing BatchYTDownloader release artifacts in {{ batchyt_release_src_dir }}.
+          Build the installer with update manifest enabled, or pass
+          -e batchyt_release_src_dir=/path/visible/to/ansible.
+
+    - name: "[batchyt] Read local manifest"
+      become: false
+      delegate_to: localhost
+      ansible.builtin.slurp:
+        src: "{{ batchyt_release_src_dir }}/{{ batchyt_manifest_name }}"
+      register: _batchyt_manifest_raw
+
+    - name: "[batchyt] Parse local manifest"
+      ansible.builtin.set_fact:
+        _batchyt_manifest_json: "{{ _batchyt_manifest_raw.content | b64decode | regex_replace('^\\ufeff', '') }}"
+        _batchyt_manifest: "{{ (_batchyt_manifest_raw.content | b64decode | regex_replace('^\\ufeff', '')) | from_json }}"
+
+    - name: "[batchyt] Assert manifest matches installer and VPS URL"
+      ansible.builtin.assert:
+        that:
+          - _batchyt_manifest.version is defined
+          - _batchyt_manifest.installer_url == batchyt_installer_url
+          - (_batchyt_manifest.sha256 | lower) == _batchyt_local_installer.stat.checksum
+        fail_msg: >-
+          {{ batchyt_release_src_dir }}/{{ batchyt_manifest_name }} does not match
+          the local installer hash or expected installer URL {{ batchyt_installer_url }}.
+          Regenerate update.json before publishing.
+
+  tasks:
+    - name: "[batchyt] Ensure remote update bucket exists"
+      ansible.builtin.file:
+        path: "{{ batchyt_remote_dir }}"
+        state: directory
+        owner: "{{ batchyt_remote_owner }}"
+        group: "{{ batchyt_remote_group }}"
+        mode: "0755"
+
+    - name: "[batchyt] Upload installer first"
+      ansible.builtin.copy:
+        src: "{{ batchyt_release_src_dir }}/{{ batchyt_installer_name }}"
+        dest: "{{ batchyt_remote_dir }}/{{ batchyt_installer_name }}.tmp"
+        owner: "{{ batchyt_remote_owner }}"
+        group: "{{ batchyt_remote_group }}"
+        mode: "0644"
+
+    - name: "[batchyt] Promote installer into place"
+      ansible.builtin.command:
+        cmd: "mv -f {{ batchyt_remote_dir }}/{{ batchyt_installer_name }}.tmp {{ batchyt_remote_dir }}/{{ batchyt_installer_name }}"
+      changed_when: true
+
+    - name: "[batchyt] Upload manifest last"
+      ansible.builtin.copy:
+        content: "{{ _batchyt_manifest_json }}"
+        dest: "{{ batchyt_remote_dir }}/{{ batchyt_manifest_name }}.tmp"
+        owner: "{{ batchyt_remote_owner }}"
+        group: "{{ batchyt_remote_group }}"
+        mode: "0644"
+
+    - name: "[batchyt] Promote manifest into place"
+      ansible.builtin.command:
+        cmd: "mv -f {{ batchyt_remote_dir }}/{{ batchyt_manifest_name }}.tmp {{ batchyt_remote_dir }}/{{ batchyt_manifest_name }}"
+      changed_when: true
+
+    - name: "[batchyt] Verify remote installer SHA256"
+      ansible.builtin.stat:
+        path: "{{ batchyt_remote_dir }}/{{ batchyt_installer_name }}"
+        checksum_algorithm: sha256
+      register: _batchyt_remote_installer
+
+    - name: "[batchyt] Assert remote installer hash"
+      ansible.builtin.assert:
+        that:
+          - _batchyt_remote_installer.stat.checksum == _batchyt_local_installer.stat.checksum
+        fail_msg: "Remote installer checksum does not match local installer."
+
+  post_tasks:
+    - name: "[batchyt] Verify public manifest URL"
+      become: false
+      delegate_to: localhost
+      ansible.builtin.uri:
+        url: "{{ batchyt_manifest_url }}"
+        method: GET
+        return_content: true
+        headers:
+          Cache-Control: no-cache
+      register: _batchyt_public_manifest
+      when: batchyt_verify_public_urls | bool
+
+    - name: "[batchyt] Assert public manifest hash"
+      ansible.builtin.assert:
+        that:
+          - ((_batchyt_public_manifest.content | regex_replace('^\\ufeff', '') | from_json).sha256 | lower) == _batchyt_local_installer.stat.checksum
+        fail_msg: "Public update.json does not expose the uploaded installer hash yet."
+      when: batchyt_verify_public_urls | bool
+
+    - name: "[batchyt] Verify public installer URL"
+      become: false
+      delegate_to: localhost
+      ansible.builtin.uri:
+        url: "{{ batchyt_installer_url }}"
+        method: HEAD
+        status_code: 200
+      when: batchyt_verify_public_urls | bool
+
+    - name: "[batchyt] Published URLs"
+      ansible.builtin.debug:
+        msg:
+          - "Published BatchYTDownloader {{ _batchyt_manifest.version }}"
+          - "{{ batchyt_manifest_url }}"
+          - "{{ batchyt_installer_url }}"

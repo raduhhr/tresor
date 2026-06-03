@@ -1,0 +1,11 @@
+---
+- name: Run Tresor Index due-source cycle once
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Run Tresor Index due-source cycle once
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: run-once

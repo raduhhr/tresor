@@ -1,0 +1,53 @@
+---
+tresor_index_enabled: true
+
+tresor_index_app_image: "tresor-index-app:local"
+tresor_index_postgres_image: "{{ tresor_versions.tresor_index_postgres_image | default('postgres:16-alpine') }}"
+tresor_index_force_rebuild: true
+
+tresor_index_network: internal_net
+tresor_index_egress_network: public_net
+tresor_index_scheduler_networks:
+  - "{{ tresor_index_network }}"
+  - "{{ tresor_index_egress_network }}"
+tresor_index_app_dir: /opt/tresor-index/app
+tresor_index_config_dir: /mnt/ssd/configs/tresor-index
+tresor_index_db_data_dir: "{{ tresor_index_config_dir }}/postgres-data"
+tresor_index_sources_file: "{{ tresor_index_config_dir }}/sources.yml"
+tresor_index_env_file: "{{ tresor_index_config_dir }}/tresor-index.env"
+
+tresor_index_db_container_name: tresor-index-db
+tresor_index_scheduler_container_name: tresor-index-scheduler
+tresor_index_api_enabled: true
+tresor_index_api_container_name: tresor-index-api
+tresor_index_api_networks:
+  - "{{ tresor_index_network }}"
+  - "{{ tresor_index_egress_network }}"
+tresor_index_api_bind_addr: "{{ wg_bind_ip | default('10.66.66.2') }}"
+tresor_index_api_host_port: 18080
+tresor_index_api_container_port: 8000
+tresor_index_db_name: tresor_index
+tresor_index_db_user: tresor_index
+tresor_index_db_password: "{{ vault_tresor_index_db_password | default('tresor_index_local_only_change_me') }}"
+tresor_index_grafana_db_user: tresor_index_grafana
+tresor_index_grafana_db_password: "{{ vault_tresor_index_grafana_db_password | default(tresor_index_db_password) }}"
+tresor_index_public_api_db_user: tresor_index_public_api
+tresor_index_public_api_db_password: "{{ vault_tresor_index_public_api_db_password | default(tresor_index_grafana_db_password) }}"
+tresor_index_postgres_uid: "70"
+tresor_index_postgres_gid: "70"
+
+tresor_index_scheduler_interval_seconds: 300
+tresor_index_timezone: "{{ base_timezone | default('Europe/Bucharest') }}"
+tresor_index_discord_username: "Tresor Index"
+tresor_index_discord_webhook_votes: ""
+tresor_index_discord_webhook_tech_news: ""
+tresor_index_discord_webhook_romanian_news: ""
+tresor_index_discord_webhook_real_estate: ""
+tresor_index_digest_votes_time: "20:00"
+tresor_index_digest_romanian_news_time: "20:30"
+tresor_index_digest_tech_news_time: "21:00"
+tresor_index_digest_real_estate_time: "21:30"
+
+# Keep this empty until sources are intentionally selected. RSS sources can be
+# added here without changing code; new scraper types become app modules later.
+tresor_index_sources: []

@@ -1,0 +1,10 @@
+---
+- name: Tresor Index status
+  hosts: tresor
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Run Tresor Index status tasks
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: status

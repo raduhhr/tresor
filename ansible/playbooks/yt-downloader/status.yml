@@ -1,0 +1,24 @@
+---
+- name: Check BatchYT liked videos automation status
+  hosts: prod
+  become: true
+  tasks:
+    - name: Show timer status
+      ansible.builtin.command: systemctl status batchyt-liked.timer --no-pager
+      register: _batchyt_timer_status
+      changed_when: false
+      failed_when: false
+
+    - name: Print timer status
+      ansible.builtin.debug:
+        var: _batchyt_timer_status.stdout_lines
+
+    - name: Show recent service logs
+      ansible.builtin.command: journalctl -u batchyt-liked.service -n 80 --no-pager
+      register: _batchyt_service_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Print recent service logs
+      ansible.builtin.debug:
+        var: _batchyt_service_logs.stdout_lines

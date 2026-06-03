@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+staging_root="{{ batchyt_deploy_staging_root }}"
+public_dir="{{ batchyt_deploy_public_dir }}"
+installer_name="{{ batchyt_deploy_installer_name }}"
+manifest_name="{{ batchyt_deploy_manifest_name }}"
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: batchyt-promote-update STAGING_DIR" >&2
+  exit 64
+fi
+
+stage="$(realpath -m "$1")"
+root="$(realpath -m "$staging_root")"
+case "$stage/" in
+  "$root"/*) ;;
+  *)
+    echo "refusing staging path outside $root: $stage" >&2
+    exit 65
+    ;;
+esac
+
+installer="$stage/$installer_name"
+manifest="$stage/$manifest_name"
+if [[ ! -f "$installer" || ! -f "$manifest" ]]; then
+  echo "staging directory must contain $installer_name and $manifest_name" >&2
+  exit 66
+fi
+
+installer_sha="$(sha256sum "$installer" | awk '{print tolower($1)}')"
+manifest_sha="$(
+  python3 - "$manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8-sig") as handle:
+    payload = json.load(handle)
+print(str(payload.get("sha256", "")).lower())
+PY
+)"
+
+if [[ -z "$manifest_sha" || "$installer_sha" != "$manifest_sha" ]]; then
+  echo "manifest sha256 does not match installer" >&2
+  exit 67
+fi
+
+install -d -m 0755 "$public_dir"
+tmp_installer="$public_dir/$installer_name.tmp.$$"
+tmp_manifest="$public_dir/$manifest_name.tmp.$$"
+trap 'rm -f "$tmp_installer" "$tmp_manifest"' EXIT
+
+install -m 0644 "$installer" "$tmp_installer"
+mv -f "$tmp_installer" "$public_dir/$installer_name"
+
+install -m 0644 "$manifest" "$tmp_manifest"
+mv -f "$tmp_manifest" "$public_dir/$manifest_name"
+
+rm -rf "$stage"
+echo "published BatchYTDownloader update to $public_dir"

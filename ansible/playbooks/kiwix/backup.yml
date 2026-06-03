@@ -45,6 +45,6 @@
     - name: Log backup
       ansible.builtin.lineinfile:
         path: /var/log/kiwix-backup.log
-        line: "[{{ ansible_date_time.iso8601 }}] Snapshot created: {{ _snapshot.stdout }}"
+        line: "[{{ ansible_facts.date_time.iso8601 }}] Snapshot created: {{ _snapshot.stdout }}"
         create: true
         mode: "0644"

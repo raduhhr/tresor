@@ -1,0 +1,11 @@
+---
+- name: Import managed Grafana dashboards via API
+  hosts: tresor
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: Reconcile Grafana datasource and import dashboards
+      ansible.builtin.include_role:
+        name: grafana
+        tasks_from: sync_api

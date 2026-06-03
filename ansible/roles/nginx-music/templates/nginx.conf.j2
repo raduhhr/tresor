@@ -52,7 +52,7 @@ http {
 	# gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
 	##
-	# Rate limiting zones (cloud.example.com)
+	# Rate limiting zones (cloud.raduhhr.xyz)
 	# limit_conn_zone omitted — nginx 1.26.3 bug with limit_conn in included files
 	##
 	limit_req_zone $binary_remote_addr zone=cloud_req:10m rate={{ nginx_cloud_rate_limit }};

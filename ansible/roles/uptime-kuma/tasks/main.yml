@@ -1,5 +1,5 @@
 ---
-# Deploy Uptime Kuma on public_net for mc-status.example.com
+# Deploy Uptime Kuma on public_net for status.raduhhr.xyz
 # Root-full Docker version (HTTP-only; TLS handled by Cloudflare)
 
 - name: Ensure Uptime Kuma config directory exists
@@ -8,7 +8,7 @@
     state: directory
     owner: root
     group: root
-    mode: '0755'
+    mode: "0755"
 
 - name: Run Uptime Kuma container
   community.docker.docker_container:
@@ -19,23 +19,27 @@
       - name: public_net
     volumes:
       - "{{ uptime_kuma_config_dir | default('/mnt/ssd/configs/uptime-kuma') }}:/app/data"
-    ports: []  # no host ports — Traefik handles exposure
+    ports: []  # no host ports, Traefik handles exposure
     labels:
       traefik.enable: "true"
 
-      # === Main router ===
-      traefik.http.routers.uptime-kuma.rule: "Host(`mc-status.example.com`)"
+      # Main app router
+      traefik.http.routers.uptime-kuma.rule: "Host(`{{ uptime_kuma_public_host }}`)"
       traefik.http.routers.uptime-kuma.entrypoints: "web"
+      traefik.http.routers.uptime-kuma.priority: "10"
       traefik.http.services.uptime-kuma.loadbalancer.server.port: "3001"
 
-      # === Redirect / → /status/tresor ===
-      # Match any scheme + host root and redirect permanently
-      traefik.http.middlewares.kuma-redirect.redirectregex.regex: "^https?://mc-status\\.example\\.com/?$"
-      traefik.http.middlewares.kuma-redirect.redirectregex.replacement: "https://mc-status.example.com/status/tresor"
-      traefik.http.middlewares.kuma-redirect.redirectregex.permanent: "true"
+      # Root-only redirect router
+      traefik.http.routers.uptime-kuma-root.rule: "Host(`{{ uptime_kuma_public_host }}`) && Path(`/`)"
+      traefik.http.routers.uptime-kuma-root.entrypoints: "web"
+      traefik.http.routers.uptime-kuma-root.priority: "100"
+      traefik.http.routers.uptime-kuma-root.middlewares: "kuma-root-redirect@docker"
+      traefik.http.routers.uptime-kuma-root.service: "uptime-kuma"
 
-      # Attach redirect middleware to router
-      traefik.http.routers.uptime-kuma.middlewares: "kuma-redirect@docker"
+      # Redirect / to the public status page slug
+      traefik.http.middlewares.kuma-root-redirect.redirectregex.regex: "^https?://[^/]+/?$"
+      traefik.http.middlewares.kuma-root-redirect.redirectregex.replacement: "https://{{ uptime_kuma_public_host }}/status/{{ uptime_kuma_public_status_slug }}"
+      traefik.http.middlewares.kuma-root-redirect.redirectregex.permanent: "true"
     env:
-      TZ: "UTC"
+      TZ: "Europe/Bucharest"
     state: started

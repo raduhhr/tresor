@@ -1,0 +1,1019 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Listings",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#B877D9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT count(*) AS \"Listings\" FROM items i JOIN selected_sources ss ON ss.id = i.source_id JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'price_eur' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_price ON true LEFT JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'area_sqm' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_area ON true LEFT JOIN LATERAL ( SELECT value_text FROM observations WHERE item_id = i.id AND observation_type = 'district' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_district ON true WHERE i.item_type = 'listing' AND latest_price.value_num BETWEEN ${min_price:raw} AND ${max_price:raw} AND COALESCE(latest_area.value_num, 0) >= ${min_area:raw} AND COALESCE(latest_area.value_num, 1000000) <= ${max_area:raw} AND (${district:sqlstring} = '' OR COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', '') ILIKE '%' || ${district:sqlstring} || '%') AND (${seller_business:sqlstring} = 'all' OR COALESCE(i.metadata->'seller'->>'business', '') = ${seller_business:sqlstring});",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Median Price",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#B877D9",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyEUR",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY latest_price.value_num) AS \"Median Price\" FROM items i JOIN selected_sources ss ON ss.id = i.source_id JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'price_eur' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_price ON true LEFT JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'area_sqm' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_area ON true LEFT JOIN LATERAL ( SELECT value_text FROM observations WHERE item_id = i.id AND observation_type = 'district' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_district ON true WHERE i.item_type = 'listing' AND latest_price.value_num BETWEEN ${min_price:raw} AND ${max_price:raw} AND COALESCE(latest_area.value_num, 0) >= ${min_area:raw} AND COALESCE(latest_area.value_num, 1000000) <= ${max_area:raw} AND (${district:sqlstring} = '' OR COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', '') ILIKE '%' || ${district:sqlstring} || '%') AND (${seller_business:sqlstring} = 'all' OR COALESCE(i.metadata->'seller'->>'business', '') = ${seller_business:sqlstring});",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "New Today",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#B877D9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT count(*) AS \"New Today\" FROM items i JOIN selected_sources ss ON ss.id = i.source_id JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'price_eur' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_price ON true LEFT JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'area_sqm' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_area ON true LEFT JOIN LATERAL ( SELECT value_text FROM observations WHERE item_id = i.id AND observation_type = 'district' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_district ON true WHERE i.item_type = 'listing' AND latest_price.value_num BETWEEN ${min_price:raw} AND ${max_price:raw} AND COALESCE(latest_area.value_num, 0) >= ${min_area:raw} AND COALESCE(latest_area.value_num, 1000000) <= ${max_area:raw} AND (${district:sqlstring} = '' OR COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', '') ILIKE '%' || ${district:sqlstring} || '%') AND (${seller_business:sqlstring} = 'all' OR COALESCE(i.metadata->'seller'->>'business', '') = ${seller_business:sqlstring}) AND i.first_seen_at >= date_trunc('day', now());",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Price Changes",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#B877D9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT count(*) AS \"Price Changes\" FROM items i JOIN selected_sources ss ON ss.id = i.source_id JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'price_eur' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_price ON true LEFT JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'area_sqm' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_area ON true LEFT JOIN LATERAL ( SELECT value_text FROM observations WHERE item_id = i.id AND observation_type = 'district' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_district ON true WHERE i.item_type = 'listing' AND latest_price.value_num BETWEEN ${min_price:raw} AND ${max_price:raw} AND COALESCE(latest_area.value_num, 0) >= ${min_area:raw} AND COALESCE(latest_area.value_num, 1000000) <= ${max_area:raw} AND (${district:sqlstring} = '' OR COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', '') ILIKE '%' || ${district:sqlstring} || '%') AND (${seller_business:sqlstring} = 'all' OR COALESCE(i.metadata->'seller'->>'business', '') = ${seller_business:sqlstring}) AND (SELECT count(*) FROM observations o WHERE o.item_id = i.id AND o.observation_type = 'price_eur') > 1;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Selected Sources",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#B877D9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT count(*) AS \"Selected Sources\" FROM selected_sources;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Current Fetch Errors",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#F2495C",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT count(*) AS \"Latest Fetch Errors\" FROM selected_sources ss JOIN LATERAL ( SELECT status FROM fetch_runs WHERE source_id = ss.id ORDER BY started_at DESC, id DESC LIMIT 1 ) last_run ON true WHERE last_run.status <> 'success';",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "New Listings In Range",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT count(*)::double precision AS \"New Listings\" FROM items i JOIN selected_sources ss ON ss.id = i.source_id JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'price_eur' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_price ON true LEFT JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'area_sqm' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_area ON true LEFT JOIN LATERAL ( SELECT value_text FROM observations WHERE item_id = i.id AND observation_type = 'district' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_district ON true WHERE i.item_type = 'listing' AND latest_price.value_num BETWEEN ${min_price:raw} AND ${max_price:raw} AND COALESCE(latest_area.value_num, 0) >= ${min_area:raw} AND COALESCE(latest_area.value_num, 1000000) <= ${max_area:raw} AND (${district:sqlstring} = '' OR COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', '') ILIKE '%' || ${district:sqlstring} || '%') AND (${seller_business:sqlstring} = 'all' OR COALESCE(i.metadata->'seller'->>'business', '') = ${seller_business:sqlstring}) AND $__timeFilter(i.first_seen_at);",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "13.0.1"
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Median Price In Range",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#B877D9",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0,
+          "unit": "currencyEUR"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT (percentile_cont(0.5) WITHIN GROUP (ORDER BY latest_price.value_num))::double precision AS \"Median Price\" FROM items i JOIN selected_sources ss ON ss.id = i.source_id JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'price_eur' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_price ON true LEFT JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'area_sqm' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_area ON true LEFT JOIN LATERAL ( SELECT value_text FROM observations WHERE item_id = i.id AND observation_type = 'district' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_district ON true WHERE i.item_type = 'listing' AND latest_price.value_num BETWEEN ${min_price:raw} AND ${max_price:raw} AND COALESCE(latest_area.value_num, 0) >= ${min_area:raw} AND COALESCE(latest_area.value_num, 1000000) <= ${max_area:raw} AND (${district:sqlstring} = '' OR COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', '') ILIKE '%' || ${district:sqlstring} || '%') AND (${seller_business:sqlstring} = 'all' OR COALESCE(i.metadata->'seller'->>'business', '') = ${seller_business:sqlstring}) AND $__timeFilter(i.first_seen_at);",
+          "refId": "A"
+        }
+      ],
+      "pluginVersion": "13.0.1"
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Listings By Area",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/.*price.*/"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "Open",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT CASE WHEN ss.id LIKE 'olx_bucuresti_%' THEN 'Bucuresti' WHEN ss.id LIKE 'olx_cluj_%' THEN 'Cluj' WHEN ss.id LIKE 'olx_brasov_%' THEN 'Brasov' WHEN ss.id LIKE 'olx_timisoara_%' THEN 'Timisoara' WHEN ss.id LIKE 'olx_bacau_%' THEN 'Bacau' WHEN ss.id LIKE 'olx_sibiu_%' THEN 'Sibiu' WHEN ss.id LIKE 'olx_iasi_%' THEN 'Iasi' ELSE ss.name END AS city, CASE WHEN ss.id LIKE '%_case_%' THEN 'Case' WHEN ss.id LIKE '%_apartamente_%' THEN 'Apartamente' ELSE 'Other' END AS type, COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', 'unknown') AS area, count(*) AS listings, min(latest_price.value_num) AS min_price, percentile_cont(0.5) WITHIN GROUP (ORDER BY latest_price.value_num) AS median_price, round(avg(latest_price.value_num)) AS avg_price FROM items i JOIN selected_sources ss ON ss.id = i.source_id JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'price_eur' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_price ON true LEFT JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'area_sqm' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_area ON true LEFT JOIN LATERAL ( SELECT value_text FROM observations WHERE item_id = i.id AND observation_type = 'district' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_district ON true WHERE i.item_type = 'listing' AND latest_price.value_num BETWEEN ${min_price:raw} AND ${max_price:raw} AND COALESCE(latest_area.value_num, 0) >= ${min_area:raw} AND COALESCE(latest_area.value_num, 1000000) <= ${max_area:raw} AND (${district:sqlstring} = '' OR COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', '') ILIKE '%' || ${district:sqlstring} || '%') AND (${seller_business:sqlstring} = 'all' OR COALESCE(i.metadata->'seller'->>'business', '') = ${seller_business:sqlstring}) GROUP BY 1, 2, 3 ORDER BY CASE WHEN COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', 'unknown') = 'Unspecified' THEN 1 ELSE 0 END, listings DESC, city, type, area;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Latest Listings",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/.*price.*/"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "url"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "Open",
+                    "url": "${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT CASE WHEN ss.id LIKE 'olx_bucuresti_%' THEN 'Bucuresti' WHEN ss.id LIKE 'olx_cluj_%' THEN 'Cluj' WHEN ss.id LIKE 'olx_brasov_%' THEN 'Brasov' WHEN ss.id LIKE 'olx_timisoara_%' THEN 'Timisoara' WHEN ss.id LIKE 'olx_bacau_%' THEN 'Bacau' WHEN ss.id LIKE 'olx_sibiu_%' THEN 'Sibiu' WHEN ss.id LIKE 'olx_iasi_%' THEN 'Iasi' ELSE ss.name END || ' ' || CASE WHEN ss.id LIKE '%_case_%' THEN 'Case' WHEN ss.id LIKE '%_apartamente_%' THEN 'Apartamente' ELSE 'Other' END AS source, i.external_id AS id, i.title, i.metadata->'price'->>'display' AS price, COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', 'unknown') AS area, latest_area.value_num AS sqm, CASE COALESCE(i.metadata->'seller'->>'business', '') WHEN 'true' THEN 'agency' WHEN 'false' THEN 'private' ELSE '' END AS seller, i.first_seen_at, i.canonical_url AS url FROM items i JOIN selected_sources ss ON ss.id = i.source_id JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'price_eur' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_price ON true LEFT JOIN LATERAL ( SELECT value_num FROM observations WHERE item_id = i.id AND observation_type = 'area_sqm' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_area ON true LEFT JOIN LATERAL ( SELECT value_text FROM observations WHERE item_id = i.id AND observation_type = 'district' ORDER BY observed_at DESC, id DESC LIMIT 1 ) latest_district ON true WHERE i.item_type = 'listing' AND latest_price.value_num BETWEEN ${min_price:raw} AND ${max_price:raw} AND COALESCE(latest_area.value_num, 0) >= ${min_area:raw} AND COALESCE(latest_area.value_num, 1000000) <= ${max_area:raw} AND (${district:sqlstring} = '' OR COALESCE(latest_district.value_text, i.metadata->>'area_label', i.metadata->'location'->>'district', i.metadata->'location'->>'city', '') ILIKE '%' || ${district:sqlstring} || '%') AND (${seller_business:sqlstring} = 'all' OR COALESCE(i.metadata->'seller'->>'business', '') = ${seller_business:sqlstring}) ORDER BY i.first_seen_at DESC LIMIT 80;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Source Health",
+      "datasource": {
+        "type": "postgres",
+        "uid": "tresor-index-postgres"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "tresor-index-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selected_sources AS ( SELECT id, name FROM sources s WHERE s.enabled AND s.category = 'real_estate' AND s.source_type IN ('html_search', 'html_detail') AND (${city:sqlstring} = 'all' OR s.id LIKE 'olx_' || ${city:sqlstring} || '_%') AND (${listing_type:sqlstring} = 'all' OR s.id LIKE 'olx_%_' || ${listing_type:sqlstring} || '_%') ) SELECT CASE WHEN ss.id LIKE 'olx_bucuresti_%' THEN 'Bucuresti' WHEN ss.id LIKE 'olx_cluj_%' THEN 'Cluj' WHEN ss.id LIKE 'olx_brasov_%' THEN 'Brasov' WHEN ss.id LIKE 'olx_timisoara_%' THEN 'Timisoara' WHEN ss.id LIKE 'olx_bacau_%' THEN 'Bacau' WHEN ss.id LIKE 'olx_sibiu_%' THEN 'Sibiu' WHEN ss.id LIKE 'olx_iasi_%' THEN 'Iasi' ELSE ss.name END || ' ' || CASE WHEN ss.id LIKE '%_case_%' THEN 'Case' WHEN ss.id LIKE '%_apartamente_%' THEN 'Apartamente' ELSE 'Other' END AS source, last_run.status, round(extract(epoch from (now() - last_run.finished_at)) / 60)::int AS minutes_ago, last_run.items_found AS found, last_run.items_new AS new, last_run.items_changed AS changed, left(coalesce(last_run.error, ''), 120) AS error FROM selected_sources ss LEFT JOIN LATERAL ( SELECT status, started_at, finished_at, items_found, items_new, items_changed, error FROM fetch_runs WHERE source_id = ss.id ORDER BY started_at DESC, id DESC LIMIT 1 ) last_run ON true ORDER BY CASE last_run.status WHEN 'success' THEN 1 ELSE 0 END, source;",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "real-estate"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "all",
+          "value": "all"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "City",
+        "multi": false,
+        "name": "city",
+        "options": [
+          {
+            "selected": true,
+            "text": "all",
+            "value": "all"
+          },
+          {
+            "selected": false,
+            "text": "bucuresti",
+            "value": "bucuresti"
+          },
+          {
+            "selected": false,
+            "text": "cluj",
+            "value": "cluj"
+          },
+          {
+            "selected": false,
+            "text": "brasov",
+            "value": "brasov"
+          },
+          {
+            "selected": false,
+            "text": "timisoara",
+            "value": "timisoara"
+          },
+          {
+            "selected": false,
+            "text": "bacau",
+            "value": "bacau"
+          },
+          {
+            "selected": false,
+            "text": "sibiu",
+            "value": "sibiu"
+          },
+          {
+            "selected": false,
+            "text": "iasi",
+            "value": "iasi"
+          }
+        ],
+        "query": "all,bucuresti,cluj,brasov,timisoara,bacau,sibiu,iasi",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "all",
+          "value": "all"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Type",
+        "multi": false,
+        "name": "listing_type",
+        "options": [
+          {
+            "selected": true,
+            "text": "all",
+            "value": "all"
+          },
+          {
+            "selected": false,
+            "text": "case",
+            "value": "case"
+          },
+          {
+            "selected": false,
+            "text": "apartamente",
+            "value": "apartamente"
+          }
+        ],
+        "query": "all,case,apartamente",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "50000",
+          "value": "50000"
+        },
+        "hide": 0,
+        "label": "Min EUR",
+        "name": "min_price",
+        "options": [
+          {
+            "selected": true,
+            "text": "50000",
+            "value": "50000"
+          }
+        ],
+        "query": "50000",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "200000",
+          "value": "200000"
+        },
+        "hide": 0,
+        "label": "Max EUR",
+        "name": "max_price",
+        "options": [
+          {
+            "selected": true,
+            "text": "200000",
+            "value": "200000"
+          }
+        ],
+        "query": "200000",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "0",
+          "value": "0"
+        },
+        "hide": 0,
+        "label": "Min sqm",
+        "name": "min_area",
+        "options": [
+          {
+            "selected": true,
+            "text": "0",
+            "value": "0"
+          }
+        ],
+        "query": "0",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "10000",
+          "value": "10000"
+        },
+        "hide": 0,
+        "label": "Max sqm",
+        "name": "max_area",
+        "options": [
+          {
+            "selected": true,
+            "text": "10000",
+            "value": "10000"
+          }
+        ],
+        "query": "10000",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "label": "Area text",
+        "name": "district",
+        "options": [
+          {
+            "selected": true,
+            "text": "",
+            "value": ""
+          }
+        ],
+        "query": "",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "all",
+          "value": "all"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Seller",
+        "multi": false,
+        "name": "seller_business",
+        "options": [
+          {
+            "selected": true,
+            "text": "all",
+            "value": "all"
+          },
+          {
+            "selected": false,
+            "text": "true",
+            "value": "true"
+          },
+          {
+            "selected": false,
+            "text": "false",
+            "value": "false"
+          }
+        ],
+        "query": "all,true,false",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Real Estate Listings",
+  "uid": "real-estate-listings",
+  "version": 1,
+  "weekStart": ""
+}

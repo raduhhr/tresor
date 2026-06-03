@@ -1,0 +1,1193 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, time, timedelta, timezone
+from pathlib import Path
+
+import requests
+import yaml
+from bs4 import BeautifulSoup
+from skyfield.api import EarthSatellite, load, wgs84
+
+
+CONFIG_PATH = Path("{{ satelite_watcher_config_dir }}/config.yml")
+SATELLITES_PATH = Path("{{ satelite_watcher_config_dir }}/satellites.yml")
+UPDATE_TLES_PATH = Path("{{ satelite_watcher_bin_dir }}/update_tles.py")
+SYSTEMD_RUN_BIN = "/usr/bin/systemd-run"
+SYSTEMCTL_BIN = "/usr/bin/systemctl"
+TRIGGER_UNIT_PREFIX = "satelite-watcher-trigger"
+LEGACY_TRIGGER_UNIT_PREFIXES = ["meteor-trigger"]
+
+
+def load_yaml(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def load_json(path: Path, default):
+    if not path.exists():
+        return default
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def dump_json(path: Path, payload) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def unit_exists(unit_name: str) -> bool:
+    if not unit_name:
+        return False
+    result = subprocess.run(
+        [SYSTEMCTL_BIN, "show", unit_name, "--property=LoadState", "--value"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    return result.stdout.strip() not in {"", "not-found"}
+
+
+def stop_unit_if_exists(unit_name: str) -> None:
+    if not unit_exists(unit_name):
+        return
+    subprocess.run([SYSTEMCTL_BIN, "stop", unit_name], check=False, capture_output=True, text=True)
+    subprocess.run([SYSTEMCTL_BIN, "reset-failed", unit_name], check=False, capture_output=True, text=True)
+
+
+def trigger_unit_name(pass_id: str) -> str:
+    return f"{TRIGGER_UNIT_PREFIX}-{pass_id}"
+
+
+def legacy_trigger_unit_names(pass_id: str) -> list[str]:
+    return [f"{prefix}-{pass_id}" for prefix in LEGACY_TRIGGER_UNIT_PREFIXES]
+
+
+def stop_trigger_pair(unit_prefix: str) -> None:
+    stop_unit_if_exists(f"{unit_prefix}.timer")
+    stop_unit_if_exists(f"{unit_prefix}.service")
+
+
+def get_discord_webhook_url() -> str:
+    return os.environ.get("SATELITE_WATCHER_DISCORD_WEBHOOK_URL", "").strip()
+
+
+def post_discord_payload(payload: dict) -> bool:
+    webhook_url = get_discord_webhook_url()
+    if not webhook_url:
+        return False
+
+    payload.setdefault("allowed_mentions", {"parse": []})
+    try:
+        response = requests.post(webhook_url, json=payload, timeout=15)
+        if response.status_code not in (200, 204):
+            print(
+                f"warning: Discord webhook failed: HTTP {response.status_code} {response.text[:200]}",
+                file=sys.stderr,
+            )
+            return False
+    except requests.RequestException as exc:
+        print(f"warning: Discord webhook failed: {exc}", file=sys.stderr)
+        return False
+    return True
+
+
+def post_discord_message(message: str) -> bool:
+    return post_discord_payload({"content": message[:1900]})
+
+
+def format_frequency_mhz(frequency_hz: int | None) -> str:
+    if not frequency_hz:
+        return "unknown"
+    return f"{frequency_hz / 1_000_000:.4f}".rstrip("0").rstrip(".")
+
+
+def local_datetime(value: str, tz_name: str) -> datetime:
+    dt = datetime.fromisoformat(value)
+    try:
+        from zoneinfo import ZoneInfo
+
+        local_tz = ZoneInfo(tz_name)
+        return dt.astimezone(local_tz)
+    except Exception:
+        return dt.astimezone()
+
+
+def format_local_timestamp(value: str, tz_name: str) -> str:
+    return local_datetime(value, tz_name).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def format_local_time(value: str, tz_name: str) -> str:
+    return local_datetime(value, tz_name).strftime("%H:%M")
+
+
+def format_local_date(value: str, tz_name: str) -> str:
+    return local_datetime(value, tz_name).strftime("%Y-%m-%d %Z")
+
+
+def local_date_key(value: str, tz_name: str) -> str:
+    return local_datetime(value, tz_name).strftime("%Y-%m-%d")
+
+
+def format_local_day_label(value: str, tz_name: str) -> str:
+    return local_datetime(value, tz_name).strftime("%a %Y-%m-%d %Z")
+
+
+def slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def azimuth_to_label(degrees: float) -> str:
+    labels = [
+        "N", "NNE", "NE", "ENE",
+        "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW",
+        "W", "WNW", "NW", "NNW",
+    ]
+    index = int(((degrees % 360.0) + 11.25) // 22.5) % len(labels)
+    return labels[index]
+
+
+def is_event_heading(line: str) -> bool:
+    return bool(
+        re.match(r"^\d{4}-\d{2}-\d{2}\b", line)
+        or re.match(r"^\d{1,2}[-/]\d{1,2}[-/]\d{4}\b", line)
+        or re.match(r"^[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}\b", line)
+    )
+
+
+def normalize_event_title(raw_title: str) -> str:
+    title = raw_title.strip()
+    title = re.sub(r"^\d{4}-\d{2}-\d{2}\s+", "", title)
+    title = re.sub(r"^\d{1,2}[-/]\d{1,2}[-/]\d{4}\s+", "", title)
+    title = re.sub(r"^[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}\s*[-:]\s*", "", title)
+    return re.sub(r"\s+", " ", title).strip().upper()
+
+
+def normalize_text_lines(html_text: str) -> list[str]:
+    soup = BeautifulSoup(html_text, "html.parser")
+    text = soup.get_text("\n")
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def parse_month_day_time(month_day: str, time_value: str, default_year: int) -> datetime:
+    normalized = month_day.replace(".", "").replace(",", "")
+    for pattern in ("%b %d %Y %H:%M", "%B %d %Y %H:%M"):
+        try:
+            dt = datetime.strptime(f"{normalized} {default_year} {time_value}", pattern)
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError(f"unable to parse month/day timestamp: {month_day} {time_value}")
+
+
+def parse_long_month_day_time(month_name: str, day: str, time_value: str, default_year: int) -> datetime:
+    normalized = month_name.replace(".", "")
+    for pattern in ("%B %d %Y %H:%M", "%b %d %Y %H:%M"):
+        try:
+            dt = datetime.strptime(f"{normalized} {day} {default_year} {time_value}", pattern)
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError(f"unable to parse long month/day timestamp: {month_name} {day} {time_value}")
+
+
+def parse_iso_day_time(date_value: str, time_value: str) -> datetime:
+    dt = datetime.strptime(f"{date_value} {time_value}", "%Y-%m-%d %H:%M")
+    return dt.replace(tzinfo=timezone.utc)
+
+
+def parse_ariss_event_blocks(lines: list[str]) -> list[dict]:
+    blocks = []
+    current = []
+    for line in lines:
+        if is_event_heading(line) and current:
+            blocks.append(current)
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def extract_iss_sstv_events(lines: list[str]) -> list[dict]:
+    events = []
+    supplemental = {}
+    for block in parse_ariss_event_blocks(lines):
+        block_text = "\n".join(block)
+        if "SSTV" not in block_text.upper():
+            continue
+        if "RS-38S" in block_text.upper():
+            continue
+
+        title_key = normalize_event_title(block[0])
+        published_match = re.match(r"^(\d{4}-\d{2}-\d{2})\b", block[0])
+        published_at = None
+        published_year = datetime.now(timezone.utc).year
+        if published_match:
+            published_at = datetime.strptime(published_match.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            published_year = published_at.year
+        else:
+            published_match = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", block[0])
+            if published_match:
+                day, month, year = published_match.groups()
+                published_at = datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
+                published_year = published_at.year
+            else:
+                published_match = re.match(r"^([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})\b", block[0])
+                if published_match:
+                    for pattern in ("%B %d, %Y", "%b %d, %Y"):
+                        try:
+                            published_at = datetime.strptime(published_match.group(1), pattern).replace(tzinfo=timezone.utc)
+                            published_year = published_at.year
+                            break
+                        except ValueError:
+                            continue
+
+        frequency_match = re.search(r"Frequency:\s*([0-9.]+)\s*MHz", block_text, re.IGNORECASE)
+        if not frequency_match:
+            frequency_match = re.search(r"transmitted at\s*([0-9.]+)\s*MHz", block_text, re.IGNORECASE)
+        if not frequency_match:
+            frequency_match = re.search(r"on\s*([0-9.]+)\s*MHz", block_text, re.IGNORECASE)
+        if not frequency_match:
+            frequency_match = re.search(r"([0-9.]+)_MHz(?:\.pdf)?", block_text, re.IGNORECASE)
+
+        mode_match = re.search(r"(PD120|Robot 36|Robot36|PD 120)", block_text, re.IGNORECASE)
+        if frequency_match or mode_match:
+            existing = supplemental.get(title_key, {})
+            current = {
+                "frequency_hz": int(float(frequency_match.group(1)) * 1_000_000) if frequency_match else existing.get("frequency_hz"),
+                "mode": mode_match.group(1).replace(" ", "").upper() if mode_match else existing.get("mode"),
+                "published_at_utc": published_at.isoformat() if published_at else existing.get("published_at_utc"),
+            }
+            if (current.get("published_at_utc") or "") >= (existing.get("published_at_utc") or ""):
+                supplemental[title_key] = current
+
+        start_match = re.search(
+            r"begin(?: shortly after)?\s+(\d{1,2}:\d{2})\s+UTC on\s+([A-Za-z]+)\s+(\d{1,2})",
+            block_text,
+            re.IGNORECASE,
+        )
+        end_match = re.search(
+            r"conclude(?: around)?\s+(\d{1,2}:\d{2})\s+UTC on\s+([A-Za-z]+)\s+(\d{1,2})",
+            block_text,
+            re.IGNORECASE,
+        )
+        if not start_match:
+            start_match = re.search(
+                r"Start:\s*([A-Za-z]{3,9}\.?\s+\d{1,2}),?\s*(?:\d{4})?.*?(\d{1,2}:\d{2})\s*(?:UTC|GMT)",
+                block_text,
+                re.IGNORECASE,
+            )
+            if start_match:
+                start_dt = parse_month_day_time(start_match.group(1), start_match.group(2), published_year)
+            else:
+                start_match = re.search(
+                    r"beginning today at\s+(\d{1,2}:\d{2})\s+UTC",
+                    block_text,
+                    re.IGNORECASE,
+                )
+                if start_match and published_at:
+                    start_dt = published_at.replace(
+                        hour=int(start_match.group(1).split(":")[0]),
+                        minute=int(start_match.group(1).split(":")[1]),
+                    )
+                else:
+                    start_dt = None
+        else:
+            start_dt = parse_long_month_day_time(start_match.group(2), start_match.group(3), start_match.group(1), published_year)
+
+        if not end_match:
+            end_match = re.search(
+                r"End:\s*([A-Za-z]{3,9}\.?\s+\d{1,2}),?\s*(?:\d{4})?.*?(\d{1,2}:\d{2})\s*(?:UTC|GMT)",
+                block_text,
+                re.IGNORECASE,
+            )
+            if end_match:
+                end_dt = parse_month_day_time(end_match.group(1), end_match.group(2), published_year)
+            else:
+                end_match = re.search(
+                    r"until\s+([A-Za-z]+)\s+(\d{1,2})\s+at\s+(\d{1,2}:\d{2})\s+UTC",
+                    block_text,
+                    re.IGNORECASE,
+                )
+                if end_match:
+                    end_dt = parse_long_month_day_time(end_match.group(1), end_match.group(2), end_match.group(3), published_year)
+                else:
+                    end_dt = None
+        else:
+            end_dt = parse_long_month_day_time(end_match.group(2), end_match.group(3), end_match.group(1), published_year)
+
+        if not start_dt or not end_dt or end_dt <= start_dt:
+            continue
+
+        pauses = []
+        for off_match in re.finditer(
+            r"(?:switched off|pause(?: for a school event)?):?\s*([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})\s*(?:at)?\s*(\d{1,2}:\d{2})\s*UTC",
+            block_text,
+            re.IGNORECASE,
+        ):
+            off_date = off_match.group(1)
+            off_time = off_match.group(2)
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", off_date):
+                off_dt = parse_iso_day_time(off_date, off_time)
+            else:
+                month_part = off_date.replace(",", "")
+                off_dt = parse_month_day_time(month_part.rsplit(" ", 1)[0], off_time, int(month_part.rsplit(" ", 1)[1]))
+
+            resume_pattern = re.compile(
+                rf"(?:switched on|resume):?\s*([A-Za-z]{{3,9}}\.?\s+\d{{1,2}},?\s+\d{{4}}|\d{{4}}-\d{{2}}-\d{{2}})\s*(?:at)?\s*(\d{{1,2}}:\d{{2}})\s*UTC",
+                re.IGNORECASE,
+            )
+            resume_match = resume_pattern.search(block_text, off_match.end())
+            if resume_match:
+                on_date = resume_match.group(1)
+                on_time = resume_match.group(2)
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", on_date):
+                    on_dt = parse_iso_day_time(on_date, on_time)
+                else:
+                    month_part = on_date.replace(",", "")
+                    on_dt = parse_month_day_time(month_part.rsplit(" ", 1)[0], on_time, int(month_part.rsplit(" ", 1)[1]))
+                if on_dt > off_dt:
+                    pauses.append({"start_utc": off_dt.isoformat(), "end_utc": on_dt.isoformat()})
+
+        event = {
+            "title": block[0],
+            "title_key": title_key,
+            "published_at_utc": published_at.isoformat() if published_at else None,
+            "start_utc": start_dt.isoformat(),
+            "end_utc": end_dt.isoformat(),
+            "frequency_hz": int(float(frequency_match.group(1)) * 1_000_000) if frequency_match else None,
+            "mode": mode_match.group(1).replace(" ", "").upper() if mode_match else None,
+            "pauses": pauses,
+        }
+        events.append(event)
+
+    for event in events:
+        info = supplemental.get(event["title_key"], {})
+        if event.get("frequency_hz") is None and info.get("frequency_hz") is not None:
+            event["frequency_hz"] = info["frequency_hz"]
+        if event.get("mode") is None and info.get("mode") is not None:
+            event["mode"] = info["mode"]
+
+    deduped = {}
+    for event in events:
+        key = (event["start_utc"], event["end_utc"], event.get("frequency_hz"))
+        existing = deduped.get(key)
+        if not existing or (event.get("published_at_utc") or "") > (existing.get("published_at_utc") or ""):
+            deduped[key] = event
+
+    final_events = []
+    for event in sorted(deduped.values(), key=lambda item: item["start_utc"]):
+        event.pop("title_key", None)
+        final_events.append(event)
+    return final_events
+
+
+def fetch_iss_sstv_events(config: dict) -> dict:
+    state_path = Path(config["paths"]["iss_sstv_events_file"])
+    cached = load_json(state_path, {})
+    iss_cfg = config.get("iss_sstv", {})
+    headers = {"User-Agent": config["tle"]["user_agent"]}
+    fetched_events = None
+    errors = []
+
+    for url in [iss_cfg.get("events_url"), iss_cfg.get("gallery_url")]:
+        if not url:
+            continue
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            events = extract_iss_sstv_events(normalize_text_lines(response.text))
+            if events:
+                fetched_events = {
+                    "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "source_url": url,
+                    "events": events,
+                }
+                break
+        except requests.RequestException as exc:
+            errors.append(f"{url}: {exc}")
+
+    if fetched_events is None:
+        if cached:
+            return cached
+        return {
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "source_url": iss_cfg.get("events_url"),
+            "events": [],
+            "errors": errors,
+        }
+
+    dump_json(state_path, fetched_events)
+    return fetched_events
+
+
+def load_notification_state(config: dict) -> dict:
+    state_path = Path(config["paths"]["notifications_file"])
+    return load_json(
+        state_path,
+        {
+            "updated_at_utc": None,
+            "weather": {
+                "prepass": {},
+            },
+            "meteor": {
+                "prepass": {},
+            },
+            "iss_sstv": {
+                "announced": {},
+                "started": {},
+            },
+        },
+    )
+
+
+def save_notification_state(config: dict, state: dict) -> None:
+    state["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+    dump_json(Path(config["paths"]["notifications_file"]), state)
+
+
+def satelite_watcher_pass_matches_rule(pass_info: dict, rule_cfg: dict) -> bool:
+    if pass_info.get("satellite") == "ISS SSTV":
+        return False
+    allowed_profiles = [
+        str(item).strip()
+        for item in (rule_cfg.get("decode_profiles") or ["meteor_lrpt", "noaa_apt"])
+        if str(item).strip()
+    ]
+    if (pass_info.get("decode_profile") or "meteor_lrpt") not in allowed_profiles:
+        return False
+
+    if float(pass_info.get("max_elevation_deg", 0)) < float(rule_cfg.get("min_elevation_deg", 0)):
+        return False
+
+    allowed = [item.strip().upper() for item in (rule_cfg.get("peak_azimuths") or []) if str(item).strip()]
+    if not allowed:
+        return True
+
+    return str(pass_info.get("peak_azimuth_label", "")).upper() in allowed
+
+
+def notification_timezone(tz_name: str):
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(tz_name)
+    except Exception:
+        return datetime.now().astimezone().tzinfo
+
+
+def weather_prepass_notify_at(aos_utc: datetime, notify_cfg: dict, tz_name: str) -> tuple[datetime, str]:
+    timing = str(notify_cfg.get("timing", "lead")).strip().lower()
+    if timing == "night_before":
+        local_tz = notification_timezone(tz_name)
+        local_aos = aos_utc.astimezone(local_tz)
+        notify_date = local_aos.date() - timedelta(days=1)
+        notify_hour = int(notify_cfg.get("night_before_hour", 20))
+        notify_minute = int(notify_cfg.get("night_before_minute", 0))
+        local_notify = datetime.combine(
+            notify_date,
+            time(hour=notify_hour, minute=notify_minute),
+            tzinfo=local_tz,
+        )
+        return local_notify.astimezone(timezone.utc), f"night before at {local_notify.strftime('%H:%M %Z')}"
+
+    lead_minutes = int(notify_cfg.get("lead_minutes", 1440))
+    return aos_utc - timedelta(minutes=lead_minutes), f"{lead_minutes} min"
+
+
+def format_weather_digest_line(pass_info: dict, tz_name: str) -> str:
+    frequency_hz = int(pass_info.get("frequency_hz") or 0)
+    aos_time = format_local_time(pass_info["aos_utc"], tz_name)
+    los_time = format_local_time(pass_info["los_utc"], tz_name)
+    return (
+        f"{aos_time}-{los_time} | "
+        f"{pass_info.get('satellite', 'unknown')} "
+        f"({pass_info.get('decode_profile', 'n/a')}) | "
+        f"max {pass_info.get('max_elevation_deg', 'n/a')} deg "
+        f"{pass_info.get('peak_azimuth_label', 'n/a')} | "
+        f"{format_frequency_mhz(frequency_hz)} MHz"
+    )
+
+
+def normalize_satellite_name(value: str) -> str:
+    return str(value or "").strip().upper()
+
+
+def satelite_priority_rank(pass_info: dict, priority_satellites: list[str]) -> int:
+    satellite_name = normalize_satellite_name(pass_info.get("satellite"))
+    for idx, item in enumerate(priority_satellites):
+        if satellite_name == normalize_satellite_name(item):
+            return idx
+    return len(priority_satellites)
+
+
+def is_priority_pass(pass_info: dict, priority_satellites: list[str]) -> bool:
+    return satelite_priority_rank(pass_info, priority_satellites) < len(priority_satellites)
+
+
+def weather_prepass_digest_payload(
+    digest_passes: list[dict],
+    tz_name: str,
+    timing_label: str,
+    digest_days: int,
+    max_passes_per_day: int,
+    priority_satellites: list[str] | None = None,
+) -> dict:
+    priority_satellites = [str(item).strip() for item in (priority_satellites or []) if str(item).strip()]
+    priority_names = {normalize_satellite_name(item) for item in priority_satellites}
+    first_pass = digest_passes[0]
+    last_pass = digest_passes[-1]
+    first_day_label = format_local_day_label(first_pass["aos_utc"], tz_name)
+    last_day_label = format_local_day_label(last_pass["aos_utc"], tz_name)
+    title_window = first_day_label if first_day_label == last_day_label else f"{first_day_label} -> {last_day_label}"
+    satellite_names = sorted(
+        {str(pass_info.get("satellite") or "unknown") for pass_info in digest_passes},
+        key=lambda item: (normalize_satellite_name(item) not in priority_names, item),
+    )
+    satellite_summary = ", ".join(satellite_names)
+    day_label = (
+        f"Next {digest_days} days"
+        if digest_days > 1
+        else ("Tomorrow" if "night before" in timing_label.lower() else f"On {format_local_date(first_pass['aos_utc'], tz_name)}")
+    )
+    strongest_passes = sorted(
+        digest_passes,
+        key=lambda item: (
+            -1 * is_priority_pass(item, priority_satellites),
+            float(item.get("max_elevation_deg") or 0.0),
+            item.get("aos_utc", ""),
+        ),
+        reverse=True,
+    )[:3]
+    top_lines = [
+        f"{pass_info.get('satellite', 'unknown')} "
+        f"{format_local_time(pass_info['aos_utc'], tz_name)} "
+        f"max {pass_info.get('max_elevation_deg', 'n/a')} deg "
+        f"{pass_info.get('peak_azimuth_label', 'n/a')}"
+        for pass_info in strongest_passes
+    ]
+    priority_passes = sorted(
+        [item for item in digest_passes if is_priority_pass(item, priority_satellites)],
+        key=lambda item: (
+            satelite_priority_rank(item, priority_satellites),
+            item.get("aos_utc", ""),
+        ),
+    )
+    priority_summary = (
+        "; ".join(
+            f"{pass_info.get('satellite', 'unknown')} {format_local_time(pass_info['aos_utc'], tz_name)} "
+            f"max {pass_info.get('max_elevation_deg', 'n/a')} deg {pass_info.get('peak_azimuth_label', 'n/a')}"
+            for pass_info in priority_passes[:4]
+        )
+        if priority_passes
+        else "No priority-target passes matched this digest."
+    )
+    description = (
+        f"{day_label} above Cluj-Napoca: {satellite_summary}.\n"
+        f"Window: {title_window}\n"
+        f"{len(digest_passes)} weather satellite passes matched the notification filter.\n"
+        f"Priority target: {', '.join(priority_satellites) if priority_satellites else 'none'}\n"
+        f"Top passes: {'; '.join(top_lines)}\n"
+        f"Alert timing: {timing_label}"
+    )
+    fields = [
+        {
+            "name": "Coverage",
+            "value": (
+                f"Days: {digest_days}\n"
+                f"Unique satellites: {len(satellite_names)}\n"
+                f"Per-day cap: {max_passes_per_day}"
+            )[:1024],
+            "inline": True,
+        },
+        {
+            "name": "Satellites",
+            "value": satellite_summary[:1024],
+            "inline": True,
+        },
+        {
+            "name": "Priority Target Spotlight",
+            "value": priority_summary[:1024],
+            "inline": False,
+        },
+    ]
+
+    grouped_passes: dict[str, list[dict]] = {}
+    for pass_info in digest_passes:
+        grouped_passes.setdefault(local_date_key(pass_info["aos_utc"], tz_name), []).append(pass_info)
+
+    for day_key in sorted(grouped_passes.keys()):
+        day_passes = grouped_passes[day_key]
+        day_label_text = format_local_day_label(day_passes[0]["aos_utc"], tz_name)
+        lines = []
+        for pass_info in day_passes[:max_passes_per_day]:
+            prefix = "[PRIORITY] " if is_priority_pass(pass_info, priority_satellites) else ""
+            lines.append(f"{prefix}{format_weather_digest_line(pass_info, tz_name)}")
+        omitted = len(day_passes) - len(lines)
+        if omitted > 0:
+            lines.append(f"+{omitted} more passes omitted")
+        fields.append(
+            {
+                "name": f"{day_label_text} - {len(day_passes)} pass(es)"[:256],
+                "value": "\n".join(lines)[:1024],
+                "inline": False,
+            }
+        )
+
+    return {
+        "embeds": [
+            {
+                "title": f"Satelite Watcher weather outlook - {title_window}",
+                "description": description[:4096],
+                "color": 0x4BA3FF,
+                "fields": fields,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+    }
+
+
+def notify_weather_prepass_events(config: dict, passes: list[dict]) -> None:
+    if not get_discord_webhook_url():
+        return
+
+    notifications = config.get("notifications", {})
+    notify_cfg = notifications.get("weather_prepass") or notifications.get("meteor_prepass", {})
+    if not notify_cfg.get("enabled"):
+        return
+
+    tz_name = config.get("timezone", "UTC")
+    now_utc = datetime.now(timezone.utc)
+    state = load_notification_state(config)
+    satelite_watcher_state = state.setdefault("weather", {})
+    prepass_state = satelite_watcher_state.setdefault("prepass", {})
+    legacy_prepass_state = state.setdefault("meteor", {}).setdefault("prepass", {})
+    due_passes = []
+    timing_labels = set()
+
+    for pass_info in passes:
+        if not satelite_watcher_pass_matches_rule(pass_info, notify_cfg):
+            continue
+
+        pass_id = pass_info.get("pass_id")
+        if not pass_id or pass_id in prepass_state or pass_id in legacy_prepass_state:
+            continue
+
+        aos_utc = datetime.fromisoformat(pass_info["aos_utc"])
+        notify_at, timing_label = weather_prepass_notify_at(aos_utc, notify_cfg, tz_name)
+        if not (notify_at <= now_utc < aos_utc):
+            continue
+
+        due_passes.append(pass_info)
+        timing_labels.add(timing_label)
+
+    if not due_passes:
+        return
+
+    due_passes.sort(key=lambda item: item["aos_utc"])
+    digest_days = max(1, int(notify_cfg.get("digest_days", 1) or 1))
+    max_passes_per_day = max(1, int(notify_cfg.get("max_passes_per_day", 8) or 8))
+    first_due_local_date = local_datetime(due_passes[0]["aos_utc"], tz_name).date()
+    last_digest_local_date = first_due_local_date + timedelta(days=digest_days - 1)
+    digest_passes = []
+    for pass_info in passes:
+        if not satelite_watcher_pass_matches_rule(pass_info, notify_cfg):
+            continue
+        pass_id = pass_info.get("pass_id")
+        if not pass_id or pass_id in prepass_state or pass_id in legacy_prepass_state:
+            continue
+        pass_local_date = local_datetime(pass_info["aos_utc"], tz_name).date()
+        if first_due_local_date <= pass_local_date <= last_digest_local_date:
+            digest_passes.append(pass_info)
+
+    if not digest_passes:
+        return
+
+    digest_passes.sort(key=lambda item: item["aos_utc"])
+    timing_label = ", ".join(sorted(timing_labels))
+    priority_satellites = notify_cfg.get("priority_satellites") or []
+    if post_discord_payload(
+        weather_prepass_digest_payload(
+            digest_passes,
+            tz_name,
+            timing_label,
+            digest_days,
+            max_passes_per_day,
+            priority_satellites,
+        )
+    ):
+        for pass_info in digest_passes:
+            prepass_state[pass_info["pass_id"]] = now_utc.isoformat()
+        save_notification_state(config, state)
+
+
+def notify_iss_sstv_events(config: dict, events_payload: dict) -> None:
+    if not get_discord_webhook_url():
+        return
+
+    notify_cfg = config.get("notifications", {}).get("iss_sstv", {})
+    if not notify_cfg.get("notify_on_announcement") and not notify_cfg.get("notify_on_start"):
+        return
+
+    state = load_notification_state(config)
+    iss_state = state.setdefault("iss_sstv", {})
+    announced = iss_state.setdefault("announced", {})
+    started = iss_state.setdefault("started", {})
+    changed = False
+    now_utc = datetime.now(timezone.utc)
+    tz_name = config.get("timezone", "UTC")
+
+    for event in events_payload.get("events", []):
+        try:
+            event_start = datetime.fromisoformat(event["start_utc"])
+            event_end = datetime.fromisoformat(event["end_utc"])
+        except (KeyError, ValueError):
+            continue
+
+        if event_end <= now_utc:
+            continue
+
+        event_key = f"{event['start_utc']}|{event['end_utc']}|{event.get('frequency_hz')}"
+        frequency_hz = int(event.get("frequency_hz") or config["iss_sstv"]["default_frequency_hz"])
+        mode = event.get("mode") or config["iss_sstv"].get("default_mode", "unknown")
+
+        if notify_cfg.get("notify_on_announcement") and event_key not in announced:
+            message = (
+                "**ISS SSTV event announced**\n"
+                f"Title: {event.get('title', 'ISS SSTV')}\n"
+                f"Start: {format_local_timestamp(event['start_utc'], tz_name)}\n"
+                f"End: {format_local_timestamp(event['end_utc'], tz_name)}\n"
+                f"Frequency: {format_frequency_mhz(frequency_hz)} MHz\n"
+                f"Mode: {mode}"
+            )
+            if post_discord_message(message):
+                announced[event_key] = now_utc.isoformat()
+                changed = True
+
+        if notify_cfg.get("notify_on_start") and event_start <= now_utc < event_end and event_key not in started:
+            message = (
+                "**ISS SSTV event started**\n"
+                f"Title: {event.get('title', 'ISS SSTV')}\n"
+                f"End: {format_local_timestamp(event['end_utc'], tz_name)}\n"
+                f"Frequency: {format_frequency_mhz(frequency_hz)} MHz\n"
+                f"Mode: {mode}"
+            )
+            if post_discord_message(message):
+                started[event_key] = now_utc.isoformat()
+                changed = True
+
+    if changed:
+        save_notification_state(config, state)
+
+
+def event_windows_for_target(event: dict) -> list[tuple[datetime, datetime]]:
+    start_dt = datetime.fromisoformat(event["start_utc"])
+    end_dt = datetime.fromisoformat(event["end_utc"])
+    windows = [(start_dt, end_dt)]
+    for pause in event.get("pauses", []):
+        pause_start = datetime.fromisoformat(pause["start_utc"])
+        pause_end = datetime.fromisoformat(pause["end_utc"])
+        new_windows = []
+        for window_start, window_end in windows:
+            if pause_end <= window_start or pause_start >= window_end:
+                new_windows.append((window_start, window_end))
+                continue
+            if pause_start > window_start:
+                new_windows.append((window_start, pause_start))
+            if pause_end < window_end:
+                new_windows.append((pause_end, window_end))
+        windows = new_windows
+    return windows
+
+
+def build_iss_sstv_targets(config: dict, tle_cache: dict, events_payload: dict | None = None) -> list[dict]:
+    iss_cfg = config.get("iss_sstv", {})
+    if not iss_cfg.get("enabled"):
+        return []
+
+    tle_by_name = {item["name"]: item for item in tle_cache.get("satellites", [])}
+    tle_entry = tle_by_name.get(iss_cfg["tle_name"])
+    if not tle_entry:
+        return []
+
+    if events_payload is None:
+        events_payload = fetch_iss_sstv_events(config)
+    now_utc = datetime.now(timezone.utc)
+    lookahead_end = now_utc + timedelta(hours=int(config["schedule"]["lookahead_hours"]))
+    targets = []
+    for event in events_payload.get("events", []):
+        event_start = datetime.fromisoformat(event["start_utc"])
+        event_end = datetime.fromisoformat(event["end_utc"])
+        if event_end < now_utc or event_start > lookahead_end:
+            continue
+        targets.append(
+            {
+                "name": "ISS SSTV",
+                "tle_lookup_name": iss_cfg["tle_name"],
+                "frequency_hz": int(event.get("frequency_hz") or iss_cfg["default_frequency_hz"]),
+                "event_windows": [
+                    {"start_utc": start.isoformat(), "end_utc": end.isoformat()}
+                    for start, end in event_windows_for_target(event)
+                ],
+                "sstv_mode": event.get("mode") or iss_cfg.get("default_mode"),
+            }
+        )
+    return targets
+
+
+def persist_pass_metadata(config: dict, pass_info: dict) -> Path:
+    metadata_dir = Path(config["paths"]["pass_metadata_dir"])
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = metadata_dir / f"{pass_info['pass_id']}.json"
+    dump_json(metadata_path, pass_info)
+    return metadata_path
+
+
+def is_same_physical_pass(existing: dict, candidate: dict) -> bool:
+    if existing.get("satellite") != candidate.get("satellite"):
+        return False
+
+    existing_tca = datetime.fromisoformat(existing["tca_utc"])
+    candidate_tca = datetime.fromisoformat(candidate["tca_utc"])
+    return abs((existing_tca - candidate_tca).total_seconds()) <= 900
+
+
+def should_keep_pass(pass_info: dict, config: dict) -> bool:
+    if pass_info["satellite"] == "ISS SSTV":
+        return True
+    filters = config["filter"]
+    if filters["mode"] != "filtered":
+        return True
+
+    if pass_info["max_elevation_deg"] < float(filters["min_elevation_deg"]):
+        return False
+
+    allowed = [item.upper() for item in (filters.get("allowed_peak_azimuths") or [])]
+    if not allowed:
+        return True
+
+    return azimuth_to_label(pass_info["peak_azimuth_deg"]) in allowed
+
+
+def pass_overlaps_windows(pass_info: dict, windows: list[dict]) -> bool:
+    if not windows:
+        return True
+    pass_start = datetime.fromisoformat(pass_info["record_start_utc"])
+    pass_end = datetime.fromisoformat(pass_info["record_end_utc"])
+    for window in windows:
+        window_start = datetime.fromisoformat(window["start_utc"])
+        window_end = datetime.fromisoformat(window["end_utc"])
+        if pass_start < window_end and pass_end > window_start:
+            return True
+    return False
+
+
+def compute_passes(config: dict, tle_cache: dict, targets: list[dict]) -> list[dict]:
+    ts = load.timescale()
+    observer = wgs84.latlon(
+        latitude_degrees=float(config["location"]["latitude"]),
+        longitude_degrees=float(config["location"]["longitude"]),
+        elevation_m=float(config["location"]["altitude_m"]),
+    )
+
+    now_utc = datetime.now(timezone.utc)
+    horizon = now_utc + timedelta(hours=int(config["schedule"]["lookahead_hours"]))
+    t0 = ts.from_datetime(now_utc)
+    t1 = ts.from_datetime(horizon)
+
+    passes = []
+    tle_by_name = {item["name"]: item for item in tle_cache.get("satellites", [])}
+
+    for satellite in targets:
+        tle_entry = tle_by_name.get(satellite.get("tle_lookup_name", satellite["name"]))
+        if not tle_entry:
+            continue
+
+        sat = EarthSatellite(tle_entry["line1"], tle_entry["line2"], satellite["name"], ts)
+        times, events = sat.find_events(observer, t0, t1, altitude_degrees=0.0)
+        partial = {}
+
+        for time_obj, event_type in zip(times, events):
+            event_dt = time_obj.utc_datetime().replace(tzinfo=timezone.utc)
+            alt, az, _ = (sat - observer).at(time_obj).altaz()
+
+            if event_type == 0:
+                decode_profile = satellite.get("decode_profile") or "meteor_lrpt"
+                partial = {
+                    "satellite": satellite["name"],
+                    "decode_profile": decode_profile,
+                    "frequency_hz": satellite["frequency_hz"],
+                    "aos_utc": event_dt,
+                    "aos_azimuth_deg": round(az.degrees, 2),
+                }
+            elif event_type == 1 and partial:
+                partial["tca_utc"] = event_dt
+                partial["max_elevation_deg"] = round(alt.degrees, 2)
+                partial["peak_azimuth_deg"] = round(az.degrees, 2)
+                partial["peak_azimuth_label"] = azimuth_to_label(az.degrees)
+            elif event_type == 2 and partial:
+                partial["los_utc"] = event_dt
+                partial["los_azimuth_deg"] = round(az.degrees, 2)
+                if "tca_utc" not in partial:
+                    partial = {}
+                    continue
+
+                record_start = partial["aos_utc"] - timedelta(seconds=int(config["schedule"]["pre_record_seconds"]))
+                record_end = partial["los_utc"] + timedelta(seconds=int(config["schedule"]["post_record_seconds"]))
+                timeout_seconds = int(
+                    math.ceil((record_end - record_start).total_seconds())
+                    + int(config["schedule"]["timeout_padding_seconds"])
+                )
+
+                tca_bucket = int(((partial["tca_utc"].timestamp() + 150) // 300) * 300)
+                pass_id = f"{slugify(partial['satellite'])}-{tca_bucket}"
+                pass_info = {
+                    "pass_id": pass_id,
+                    "satellite": partial["satellite"],
+                    "decode_profile": partial["decode_profile"],
+                    "record_enabled": bool(satellite.get("record_enabled", True)),
+                    "frequency_hz": int(partial["frequency_hz"]),
+                    "aos_utc": partial["aos_utc"].isoformat(),
+                    "tca_utc": partial["tca_utc"].isoformat(),
+                    "los_utc": partial["los_utc"].isoformat(),
+                    "aos_azimuth_deg": partial["aos_azimuth_deg"],
+                    "los_azimuth_deg": partial["los_azimuth_deg"],
+                    "max_elevation_deg": partial["max_elevation_deg"],
+                    "peak_azimuth_deg": partial["peak_azimuth_deg"],
+                    "peak_azimuth_label": partial["peak_azimuth_label"],
+                    "record_start_utc": record_start.isoformat(),
+                    "record_end_utc": record_end.isoformat(),
+                    "timeout_seconds": timeout_seconds,
+                }
+
+                if (
+                    record_end > now_utc
+                    and pass_overlaps_windows(pass_info, satellite.get("event_windows", []))
+                    and should_keep_pass(pass_info, config)
+                ):
+                    passes.append(pass_info)
+
+                partial = {}
+
+    passes.sort(key=lambda item: item["record_start_utc"])
+    return passes
+
+
+def pass_priority(pass_info: dict) -> float:
+    if pass_info["satellite"] == "ISS SSTV":
+        return 10_000.0 + float(pass_info.get("max_elevation_deg") or 0)
+    return float(pass_info.get("max_elevation_deg") or 0)
+
+
+def select_non_overlapping_passes(passes: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Pick the best set of record windows for a single SDR receiver."""
+    if not passes:
+        return [], []
+
+    ordered = sorted(
+        passes,
+        key=lambda item: (
+            datetime.fromisoformat(item["record_end_utc"]),
+            datetime.fromisoformat(item["record_start_utc"]),
+        ),
+    )
+    starts = [datetime.fromisoformat(item["record_start_utc"]) for item in ordered]
+    ends = [datetime.fromisoformat(item["record_end_utc"]) for item in ordered]
+
+    previous = []
+    for index, start in enumerate(starts):
+        match = -1
+        for candidate in range(index - 1, -1, -1):
+            if ends[candidate] <= start:
+                match = candidate
+                break
+        previous.append(match)
+
+    count = len(ordered)
+    scores = [0.0] * (count + 1)
+    take = [False] * count
+    for index, pass_info in enumerate(ordered):
+        take_score = pass_priority(pass_info) + scores[previous[index] + 1]
+        skip_score = scores[index]
+        if take_score >= skip_score:
+            scores[index + 1] = take_score
+            take[index] = True
+        else:
+            scores[index + 1] = skip_score
+
+    selected_indexes = set()
+    index = count - 1
+    while index >= 0:
+        take_score = pass_priority(ordered[index]) + scores[previous[index] + 1]
+        if take[index] and take_score >= scores[index]:
+            selected_indexes.add(index)
+            index = previous[index]
+        else:
+            index -= 1
+
+    selected = [item for index, item in enumerate(ordered) if index in selected_indexes]
+    selected_ids = {item["pass_id"] for item in selected}
+    dropped = [item for item in passes if item["pass_id"] not in selected_ids]
+    selected.sort(key=lambda item: item["record_start_utc"])
+    dropped.sort(key=lambda item: item["record_start_utc"])
+    return selected, dropped
+
+
+def schedule_passes(config: dict, passes: list[dict]) -> dict:
+    scheduled_path = Path(config["paths"]["scheduled_file"])
+    scheduled_state = load_json(scheduled_path, {"scheduled": {}})
+    existing = scheduled_state.get("scheduled", {})
+    now_utc = datetime.now(timezone.utc)
+    desired_pass_ids = {item["pass_id"] for item in passes}
+    passes_by_id = {item["pass_id"]: item for item in passes}
+    pruned = {}
+    canceled = 0
+
+    for pass_id, info in existing.items():
+        record_end = datetime.fromisoformat(info["record_end_utc"])
+        trigger_unit = info.get("trigger_unit", "")
+        desired_trigger_unit = trigger_unit_name(pass_id)
+        still_desired = pass_id in desired_pass_ids or any(
+            is_same_physical_pass(info, pass_info) for pass_info in passes
+        )
+        if (
+            record_end > now_utc - timedelta(days=1)
+            and trigger_unit == desired_trigger_unit
+            and unit_exists(f"{trigger_unit}.timer")
+            and still_desired
+        ):
+            desired = passes_by_id.get(pass_id)
+            if desired:
+                info["decode_profile"] = desired.get("decode_profile") or info.get("decode_profile") or "meteor_lrpt"
+                info["max_elevation_deg"] = desired.get("max_elevation_deg", info.get("max_elevation_deg"))
+                info["peak_azimuth_label"] = desired.get("peak_azimuth_label", info.get("peak_azimuth_label"))
+                info["frequency_hz"] = desired.get("frequency_hz", info.get("frequency_hz"))
+                info["timeout_seconds"] = desired.get("timeout_seconds", info.get("timeout_seconds"))
+            pruned[pass_id] = info
+        else:
+            if trigger_unit:
+                stop_trigger_pair(trigger_unit)
+            for legacy_trigger_unit in legacy_trigger_unit_names(pass_id):
+                stop_trigger_pair(legacy_trigger_unit)
+            canceled += 1
+
+    created = 0
+    for pass_info in passes:
+        pass_id = pass_info["pass_id"]
+        if pass_id in pruned or any(is_same_physical_pass(info, pass_info) for info in pruned.values()):
+            continue
+
+        metadata_path = Path(config["paths"]["pass_metadata_dir"]) / f"{pass_id}.json"
+        existing_metadata = load_json(metadata_path, {})
+        if existing_metadata.get("stage") in {"recording", "success", "failed"}:
+            continue
+
+        persist_pass_metadata(config, pass_info)
+        record_start = datetime.fromisoformat(pass_info["record_start_utc"])
+        trigger_unit = trigger_unit_name(pass_id)
+        stop_trigger_pair(trigger_unit)
+        for legacy_trigger_unit in legacy_trigger_unit_names(pass_id):
+            stop_trigger_pair(legacy_trigger_unit)
+        if record_start <= now_utc:
+            timer_arg = "--on-active=1s"
+        else:
+            timer_arg = f"--on-calendar={record_start.astimezone().strftime('%Y-%m-%d %H:%M:%S')}"
+
+        command = [
+            SYSTEMD_RUN_BIN,
+            "--unit",
+            trigger_unit,
+            "--collect",
+            "--description",
+            f"Trigger Satelite Watcher recording for {pass_id}",
+            "--timer-property=AccuracySec=1s",
+            timer_arg,
+            SYSTEMCTL_BIN,
+            "start",
+            f"{{ satelite_watcher_record_service_name }}@{pass_id}.service",
+        ]
+        subprocess.run(command, check=True)
+        pruned[pass_id] = {
+            "trigger_unit": trigger_unit,
+            "record_unit": f"{{ satelite_watcher_record_service_name }}@{pass_id}.service",
+            "metadata_path": str(Path(config["paths"]["pass_metadata_dir"]) / f"{pass_id}.json"),
+            "satellite": pass_info["satellite"],
+            "decode_profile": pass_info.get("decode_profile") or "meteor_lrpt",
+            "tca_utc": pass_info["tca_utc"],
+            "record_start_utc": pass_info["record_start_utc"],
+            "record_end_utc": pass_info["record_end_utc"],
+            "scheduled_at_utc": now_utc.isoformat(),
+        }
+        created += 1
+
+    payload = {
+        "updated_at_utc": now_utc.isoformat(),
+        "scheduled": pruned,
+        "created_this_run": created,
+        "canceled_this_run": canceled,
+    }
+    dump_json(scheduled_path, payload)
+    return payload
+
+
+def main() -> int:
+    config = load_yaml(CONFIG_PATH)
+    subprocess.run([sys.executable, str(UPDATE_TLES_PATH)], check=True)
+    tle_cache = load_json(Path(config["paths"]["tle_cache_file"]), {})
+    weather_targets = load_yaml(SATELLITES_PATH).get("satellites", [])
+    iss_events_payload = fetch_iss_sstv_events(config) if config.get("iss_sstv", {}).get("enabled") else {"events": []}
+    notify_iss_sstv_events(config, iss_events_payload)
+    iss_targets = build_iss_sstv_targets(config, tle_cache, iss_events_payload)
+    candidate_passes = compute_passes(config, tle_cache, weather_targets + iss_targets)
+    recording_paused = bool(config.get("schedule", {}).get("recording_paused", False))
+    pause_reason = str(config.get("schedule", {}).get("recording_pause_reason", "") or "").strip()
+    record_candidates = [item for item in candidate_passes if item.get("record_enabled", True)]
+    if recording_paused:
+        record_candidates = []
+    record_passes, dropped_conflicts = select_non_overlapping_passes(record_candidates)
+    notify_weather_prepass_events(config, candidate_passes)
+
+    dump_json(
+        Path(config["paths"]["passes_file"]),
+        {
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "passes": candidate_passes,
+            "record_passes": record_passes,
+            "candidate_passes": candidate_passes,
+            "dropped_conflicts": dropped_conflicts,
+        },
+    )
+    schedule_state = schedule_passes(config, record_passes)
+    if recording_paused:
+        reason_suffix = f" ({pause_reason})" if pause_reason else ""
+        print(
+            f"computed {len(candidate_passes)} passes, recording is paused{reason_suffix}, "
+            f"selected 0 recording passes, dropped 0 recording conflicts, and created "
+            f"{schedule_state['created_this_run']} transient timers"
+            f" (canceled {schedule_state.get('canceled_this_run', 0)})"
+        )
+    else:
+        print(
+            f"computed {len(candidate_passes)} passes, selected {len(record_passes)} non-overlapping recording passes, "
+            f"dropped {len(dropped_conflicts)} recording conflicts, and created "
+            f"{schedule_state['created_this_run']} transient timers"
+            f" (canceled {schedule_state.get('canceled_this_run', 0)})"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

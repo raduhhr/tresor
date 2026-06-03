@@ -1,0 +1,24 @@
+---
+- name: Render Satelite Watcher config
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ satelite_watcher_config_dir }}/config.yml"
+    owner: "{{ satelite_watcher_user }}"
+    group: "{{ satelite_watcher_group }}"
+    mode: "0644"
+
+- name: Render Satelite Watcher satellite definitions
+  ansible.builtin.template:
+    src: satellites.yml.j2
+    dest: "{{ satelite_watcher_config_dir }}/satellites.yml"
+    owner: "{{ satelite_watcher_user }}"
+    group: "{{ satelite_watcher_group }}"
+    mode: "0644"
+
+- name: Render Satelite Watcher notify env file
+  ansible.builtin.template:
+    src: satelite-watcher-notify.env.j2
+    dest: "{{ satelite_watcher_notify_env_file }}"
+    owner: root
+    group: "{{ satelite_watcher_group }}"
+    mode: "0640"

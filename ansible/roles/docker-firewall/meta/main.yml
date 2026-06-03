@@ -6,6 +6,6 @@ galaxy_info:
     Centralised iptables management for Tresor.
     Bind addresses are the primary firewall — this role handles
     DOCKER-USER edge cases, INPUT hygiene, and UFW orphan cleanup.
-  author: admin
+  author: radu
   license: MIT
 dependencies: []

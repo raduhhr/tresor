@@ -1,0 +1,8 @@
+---
+- name: Deploy Paper Discord join notifier
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  roles:
+    - role: paper-join-notifier

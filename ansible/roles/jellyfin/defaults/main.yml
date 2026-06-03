@@ -6,7 +6,7 @@ jellyfin_image: ""
 
 # ---- Networking / exposure ----
 jellyfin_network: "internal_net"        # docker network name
-jellyfin_bind_addr: "192.168.1.100"
+jellyfin_bind_addr: "192.0.2.10"
 jellyfin_listen_port: 8096              # host port -> container 8096
 
 # ---- Paths ----
@@ -30,4 +30,6 @@ jellyfin_group_name: "mediausers"
 jellyfin_enable_vaapi: true
 jellyfin_vaapi_device: "/dev/dri"       # passes /dev/dri into container
 
+# Keep Jellyfin from scanning and applying LUFS/audio-normalization data.
+jellyfin_enable_lufs_scan: false
 

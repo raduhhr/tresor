@@ -1,0 +1,6 @@
+---
+- name: Deploy BatchYT liked videos automation
+  hosts: prod
+  become: true
+  roles:
+    - role: yt-downloader

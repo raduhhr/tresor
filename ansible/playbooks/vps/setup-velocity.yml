@@ -9,7 +9,7 @@
     velocity_port: 25565
     paper_backend_host: "10.66.66.2"
     paper_backend_port: 25565
-    velocity_tz: "UTC"
+    velocity_tz: "Europe/Bucharest"
     velocity_min_memory: "512M"
     velocity_max_memory: "1500M"
     velocity_forwarding_mode: "modern"

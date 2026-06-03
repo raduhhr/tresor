@@ -12,7 +12,7 @@
             'enabled': true,
             'image': tresor_versions.cloudflared_image,
             'name': 'cloudflared',
-            'tz': 'UTC',
+            'tz': 'Europe/Bucharest',
             'network': 'public_net',
             'enable_metrics': true,
             'metrics_port': 8086,
@@ -46,22 +46,33 @@
       - (cf.token | length) > 20
     fail_msg: "cloudflared.token missing/too short (set it in group_vars/prod/vault.yml)."
 
+- name: Derive cloudflared network definition from tresor_networks
+  ansible.builtin.set_fact:
+    _cf_network_def: >-
+      {{
+        (tresor_networks | default([]))
+        | selectattr('name', 'equalto', cf.network)
+        | list
+        | first
+        | default({})
+      }}
+
+- name: Assert cloudflared network exists in tresor_networks
+  ansible.builtin.assert:
+    that:
+      - _cf_network_def | length > 0
+    fail_msg: "cloudflared network '{{ cf.network }}' is missing from tresor_networks."
+
 # 0.3) Ensure network exists (defensive)
 - name: Ensure network exists
   community.docker.docker_network:
     name: "{{ cf.network }}"
     driver: bridge
-    internal: false
+    internal: "{{ _cf_network_def.internal | default(false) | bool }}"
     # IPAM driven by tresor_networks so subnet doesn't conflict with manually-managed bridges
-    ipam_config: >-
-      {{
-        tresor_networks
-        | selectattr('name', 'equalto', cf.network)
-        | map(attribute='subnet')
-        | map('regex_replace', '^(.*)$', '{"subnet": "\\1"}')
-        | map('from_yaml') | list
-        | default(omit, true)
-      }}
+    ipam_config:
+      - subnet: "{{ _cf_network_def.subnet }}"
+        gateway: "{{ _cf_network_def.gateway }}"
 
 # 0.4) Ensure metrics port is free (only if enabled)
 - name: Check if metrics port is free
@@ -129,4 +140,3 @@
     status_code: 200
     return_content: false
   changed_when: false
-

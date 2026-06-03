@@ -1,0 +1,11 @@
+---
+- name: Restart Paper Discord join notifier
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Restart service
+      ansible.builtin.systemd:
+        name: paper-join-notifier
+        state: restarted

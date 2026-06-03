@@ -1,0 +1,18 @@
+---
+- name: Stop bday-notifier cron job
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    cron_file: /etc/cron.d/bday-notifier
+
+  tasks:
+    - name: Disable bday-notifier cron entry
+      ansible.builtin.file:
+        path: "{{ cron_file }}"
+        state: absent
+
+    - name: Show stop summary
+      ansible.builtin.debug:
+        msg: "Disabled {{ cron_file }}; app files and state were left in place."

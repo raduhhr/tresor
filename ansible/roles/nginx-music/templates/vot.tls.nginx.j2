@@ -1,0 +1,91 @@
+# Managed by Ansible: nginx-music role / {{ nginx_vot_config_name }} (TLS production)
+# Reverse proxy for the Tresor Index Astro frontend running locally on the VPS.
+
+upstream vot_fe_upstream {
+  server {{ nginx_vot_upstream_host }}:{{ nginx_vot_upstream_port }};
+  keepalive 16;
+}
+
+{% if nginx_vot_rate_limit_enabled | bool %}
+limit_req_zone $binary_remote_addr zone=vot_public:10m rate={{ nginx_vot_rate_limit_general }};
+limit_req_zone $binary_remote_addr zone=vot_api:10m rate={{ nginx_vot_rate_limit_api }};
+limit_conn_zone $binary_remote_addr zone=vot_conn:10m;
+{% endif %}
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name {{ nginx_vot_domain }}{% for alias in nginx_vot_aliases | default([]) %} {{ alias }}{% endfor %};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/html;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
+server {
+  listen 443 ssl;
+  listen [::]:443 ssl;
+  http2 on;
+  server_name {{ nginx_vot_domain }}{% for alias in nginx_vot_aliases | default([]) %} {{ alias }}{% endfor %};
+
+  ssl_certificate     /etc/letsencrypt/live/{{ nginx_vot_domain }}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/{{ nginx_vot_domain }}/privkey.pem;
+  include             /etc/letsencrypt/options-ssl-nginx.conf;
+  ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+{% if nginx_vot_hsts %}
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+{% endif %}
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "SAMEORIGIN" always;
+  add_header Referrer-Policy "no-referrer" always;
+  add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+  access_log {{ nginx_vot_access_log }};
+  error_log  {{ nginx_vot_error_log }} warn;
+
+{% if nginx_vot_rate_limit_enabled | bool %}
+  limit_conn vot_conn {{ nginx_vot_conn_limit }};
+  limit_req_status 429;
+{% endif %}
+
+  location ^~ /api/ {
+{% if nginx_vot_rate_limit_enabled | bool %}
+    limit_req zone=vot_api burst={{ nginx_vot_rate_limit_burst_api }} nodelay;
+{% endif %}
+    proxy_pass http://vot_fe_upstream;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection        "";
+
+    proxy_read_timeout 60s;
+    proxy_send_timeout 60s;
+    proxy_connect_timeout 10s;
+  }
+
+  location / {
+{% if nginx_vot_rate_limit_enabled | bool %}
+    limit_req zone=vot_public burst={{ nginx_vot_rate_limit_burst_general }} nodelay;
+{% endif %}
+    proxy_pass http://vot_fe_upstream;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection        "";
+
+    proxy_read_timeout 60s;
+    proxy_send_timeout 60s;
+    proxy_connect_timeout 10s;
+  }
+}

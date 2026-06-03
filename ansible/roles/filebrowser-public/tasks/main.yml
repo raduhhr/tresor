@@ -1,6 +1,6 @@
 ---
 # tasks file for roles/filebrowser-public
-# Friends 1TB drop at cloud.example.com.
+# Friends 1TB drop at cloud.raduhhr.xyz.
 # Bound to WG IP 10.66.66.2:8082 — no LAN exposure.
 # Serves /mnt/data/cloud only; cannot see /mnt/data/data.
 
@@ -55,6 +55,91 @@
       Create it manually or set filebrowser_public_create_root_dir: true.
   tags: [filebrowser-public, filebrowser-public:dirs]
 
+- name: Normalize declared public private users
+  ansible.builtin.set_fact:
+    _fbpub_private_users: >-
+      {{
+        filebrowser_public_private_users
+        | map('string')
+        | map('trim')
+        | reject('equalto', '')
+        | list
+        | unique
+      }}
+    _fbpub_shared_root: "{{ filebrowser_public_root_dir }}/{{ filebrowser_public_shared_dir_name }}"
+    _fbpub_users_root: "{{ filebrowser_public_root_dir }}/{{ filebrowser_public_users_dir_name }}"
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Assert declared public private usernames are safe
+  ansible.builtin.assert:
+    that:
+      - item is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+      - item != filebrowser_public_shared_dir_name
+      - item != filebrowser_public_users_dir_name
+      - item != filebrowser_public_private_shared_mount_name
+    fail_msg: "Unsafe or reserved filebrowser-public username '{{ item }}'."
+  loop: "{{ _fbpub_private_users }}"
+  when: _fbpub_private_users | length > 0
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Ensure shared root exists for public filebrowser
+  ansible.builtin.file:
+    path: "{{ _fbpub_shared_root }}"
+    state: directory
+    owner: "{{ filebrowser_public_uid }}"
+    group: "{{ filebrowser_public_gid }}"
+    mode: "0775"
+  become: true
+  when: _fbpub_private_users | length > 0
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Ensure users root exists for public filebrowser
+  ansible.builtin.file:
+    path: "{{ _fbpub_users_root }}"
+    state: directory
+    owner: "{{ filebrowser_public_uid }}"
+    group: "{{ filebrowser_public_gid }}"
+    mode: "0755"
+  become: true
+  when: _fbpub_private_users | length > 0
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Ensure per-user private roots exist
+  ansible.builtin.file:
+    path: "{{ _fbpub_users_root }}/{{ item }}"
+    state: directory
+    owner: "{{ filebrowser_public_uid }}"
+    group: "{{ filebrowser_public_gid }}"
+    mode: "0755"
+  loop: "{{ _fbpub_private_users }}"
+  become: true
+  when: _fbpub_private_users | length > 0
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Ensure per-user shared mountpoints exist
+  ansible.builtin.file:
+    path: "{{ _fbpub_users_root }}/{{ item }}/{{ filebrowser_public_private_shared_mount_name }}"
+    state: directory
+    owner: "{{ filebrowser_public_uid }}"
+    group: "{{ filebrowser_public_gid }}"
+    mode: "0775"
+  loop: "{{ _fbpub_private_users }}"
+  become: true
+  when: _fbpub_private_users | length > 0
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
+- name: Bind shared folder into each private home
+  ansible.posix.mount:
+    path: "{{ _fbpub_users_root }}/{{ item }}/{{ filebrowser_public_private_shared_mount_name }}"
+    src: "{{ _fbpub_shared_root }}"
+    fstype: none
+    opts: bind
+    state: mounted
+  loop: "{{ _fbpub_private_users }}"
+  become: true
+  when: _fbpub_private_users | length > 0
+  tags: [filebrowser-public, filebrowser-public:dirs]
+
 # =========================================
 # 2) Docker network pre-flight
 # =========================================
@@ -80,7 +165,7 @@
     _fbpub_volumes:
       - "{{ filebrowser_public_db_dir }}:/database"
       - "{{ filebrowser_public_config_dir }}:/config"
-      - "{{ filebrowser_public_root_dir }}:/srv"
+      - "{{ filebrowser_public_root_dir }}:/srv:{{ filebrowser_public_root_bind_mode }}"
   tags: [filebrowser-public, filebrowser-public:volumes]
 
 # =========================================
@@ -118,6 +203,31 @@
   register: _fbpub_admin_ensure
   changed_when: true
   no_log: true
+  tags: [filebrowser-public, filebrowser-public:bootstrap]
+
+- name: Ensure declared users are scoped to their private homes
+  community.docker.docker_container:
+    name: "filebrowser-public-user-scope-ensure-{{ item }}"
+    image: "{{ filebrowser_public_image }}"
+    auto_remove: true
+    state: started
+    user: "{{ filebrowser_public_uid }}:{{ filebrowser_public_gid }}"
+    volumes:
+      - "{{ filebrowser_public_db_dir }}:/database"
+    command:
+      - sh
+      - -lc
+      - >
+        set -e;
+        filebrowser -d /database/filebrowser.db
+        users update "{{ item }}"
+        --scope "/{{ filebrowser_public_users_dir_name }}/{{ item }}"
+  loop: "{{ _fbpub_private_users }}"
+  changed_when: false
+  no_log: true
+  when:
+    - filebrowser_public_manage_user_scopes | bool
+    - _fbpub_private_users | length > 0
   tags: [filebrowser-public, filebrowser-public:bootstrap]
 
 # =========================================

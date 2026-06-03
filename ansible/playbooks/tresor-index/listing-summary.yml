@@ -1,0 +1,11 @@
+---
+- name: Show Tresor Index listing summary
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Show Tresor Index listing summary
+      ansible.builtin.include_role:
+        name: tresor-index
+        tasks_from: listing-summary

@@ -1,0 +1,86 @@
+---
+- name: Launch Tresor Index civic backfill for 2016-2019
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    civic_backfill_years:
+      - 2016
+      - 2017
+      - 2018
+      - 2019
+    civic_backfill_sources:
+      - cdep_final_votes
+      - senat_final_votes
+    civic_backfill_log_dir: /mnt/ssd/configs/tresor-index/logs
+    civic_backfill_senat_sources_file: /tmp/sources-backfill-2016-2019.yml
+
+  tasks:
+    - name: Launch civic backfill in background
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p "{{ civic_backfill_log_dir }}"
+        run_id="backfill-2016-2019-$(date +%Y%m%d-%H%M%S)"
+        log="{{ civic_backfill_log_dir }}/civic-${run_id}.log"
+        pidfile="{{ civic_backfill_log_dir }}/civic-${run_id}.pid"
+        : > "$log"
+
+        nohup bash <<'BACKFILL' >> "$log" 2>&1 &
+        set -euo pipefail
+
+        echo "=== $(date -Is) preparing temporary Senate source config ==="
+        docker exec -i tresor-index-scheduler python - <<'PY'
+        from pathlib import Path
+        import yaml
+
+        src = Path("/config/sources.yml")
+        dst = Path("{{ civic_backfill_senat_sources_file }}")
+        payload = yaml.safe_load(src.read_text(encoding="utf-8")) or {}
+        for source in payload.get("sources", []):
+            if source.get("id") == "senat_final_votes":
+                source.setdefault("config", {})["max_month_steps"] = 180
+                break
+        else:
+            raise SystemExit("senat_final_votes not found in /config/sources.yml")
+        dst.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        print(dst)
+        PY
+
+        echo "=== $(date -Is) verifying temporary Senate source config ==="
+        docker exec -e TRESOR_INDEX_SOURCES_FILE={{ civic_backfill_senat_sources_file }} tresor-index-scheduler \
+          python -m tresor_index.cli source list | grep '^senat_final_votes'
+
+        for source in {{ civic_backfill_sources | join(' ') }}; do
+          for year in {{ civic_backfill_years | join(' ') }}; do
+            from_date="${year}-01-01"
+            to_date="${year}-12-31"
+            echo "=== $(date -Is) starting ${source} ${from_date} -> ${to_date} ==="
+            if [ "$source" = "senat_final_votes" ]; then
+              docker exec -e TRESOR_INDEX_SOURCES_FILE={{ civic_backfill_senat_sources_file }} tresor-index-scheduler \
+                python -m tresor_index.cli civic backfill --source "$source" --from "$from_date" --to "$to_date" \
+                --batch-days 366 --max-votes 3000 --request-delay-seconds 1.0 --stop-on-error
+            else
+              docker exec tresor-index-scheduler \
+                python -m tresor_index.cli civic backfill --source "$source" --from "$from_date" --to "$to_date" \
+                --batch-days 366 --max-votes 3000 --request-delay-seconds 1.0 --stop-on-error
+            fi
+            echo "=== $(date -Is) finished ${source} ${from_date} -> ${to_date} ==="
+          done
+        done
+
+        echo "=== $(date -Is) refreshing civic API cache ==="
+        docker exec tresor-index-scheduler python -m tresor_index.cli civic cache refresh || true
+        echo "=== $(date -Is) complete ==="
+        BACKFILL
+
+        echo $! > "$pidfile"
+        printf 'log=%s\npidfile=%s\npid=%s\n' "$log" "$pidfile" "$(cat "$pidfile")"
+      args:
+        executable: /bin/bash
+      register: civic_backfill_launch
+      changed_when: true
+
+    - name: Show launch details
+      ansible.builtin.debug:
+        var: civic_backfill_launch.stdout

@@ -1,5 +1,5 @@
 ---
-- name: Stop Jellyfin Music
+- name: Stop Jellyfin Media
   hosts: tresor
   become: true
   gather_facts: false
@@ -8,7 +8,7 @@
     container_name: jellyfin-music
 
   tasks:
-    - name: Stop Jellyfin Music container
+    - name: Stop Jellyfin Media container
       community.docker.docker_container:
         name: "{{ container_name }}"
         state: stopped
@@ -16,5 +16,5 @@
 
     - name: Show status after stop
       ansible.builtin.debug:
-        msg: "Jellyfin Music stopped successfully"
+        msg: "Jellyfin Media stopped successfully"
       when: _stop.changed

@@ -1,0 +1,100 @@
+---
+- name: End host if Paper join notifier is disabled
+  ansible.builtin.meta: end_host
+  when: not paper_join_notifier_enabled | bool
+
+- name: Sanity - webhook must be set
+  ansible.builtin.assert:
+    that:
+      - paper_join_notifier_discord_webhook_url is string
+      - paper_join_notifier_discord_webhook_url | length > 0
+      - paper_join_notifier_discord_webhook_url is match('^https://discord(app)?\\.com/api/webhooks/.+')
+    fail_msg: >-
+      paper_join_notifier_discord_webhook_url is missing or invalid.
+      Pass it from vault (e.g. vault_paper_join_notifier_discord_webhook_url).
+
+- name: Sanity - Paper data dir must be set
+  ansible.builtin.assert:
+    that:
+      - paper_data_dir is string
+      - paper_data_dir | length > 0
+    fail_msg: "paper_data_dir is required so the notifier can follow Paper logs."
+
+- name: Ensure dependencies
+  ansible.builtin.apt:
+    name: "{{ paper_join_notifier_python_packages }}"
+    state: present
+    update_cache: true
+  when: paper_join_notifier_manage_packages | bool
+
+- name: Ensure app dir exists
+  ansible.builtin.file:
+    path: "{{ paper_join_notifier_app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure config dir exists
+  ansible.builtin.file:
+    path: "{{ paper_join_notifier_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ paper_join_notifier_run_group }}"
+    mode: "0750"
+
+- name: Check Paper log directory exists
+  ansible.builtin.stat:
+    path: "{{ paper_join_notifier_log_file | dirname }}"
+  register: _paper_join_log_dir
+
+- name: Assert Paper log directory exists
+  ansible.builtin.assert:
+    that:
+      - _paper_join_log_dir.stat.exists
+      - _paper_join_log_dir.stat.isdir
+    fail_msg: "Paper log directory is missing: {{ paper_join_notifier_log_file | dirname }}. Deploy/start Paper first."
+
+- name: Install notifier script
+  ansible.builtin.copy:
+    src: paper_join_notifier.py
+    dest: "{{ paper_join_notifier_script_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: restart paper-join-notifier
+
+- name: Render env file
+  ansible.builtin.template:
+    src: paper-join-notifier.env.j2
+    dest: "{{ paper_join_notifier_env_file }}"
+    owner: root
+    group: "{{ paper_join_notifier_run_group }}"
+    mode: "0640"
+  no_log: true
+  notify: restart paper-join-notifier
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: paper-join-notifier.service.j2
+    dest: "/etc/systemd/system/{{ paper_join_notifier_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - daemon-reload
+    - restart paper-join-notifier
+
+- name: Enable and start Paper join notifier
+  ansible.builtin.systemd:
+    name: "{{ paper_join_notifier_service_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Show Paper join notifier summary
+  ansible.builtin.debug:
+    msg:
+      service: "{{ paper_join_notifier_service_name }}"
+      log_file: "{{ paper_join_notifier_log_file }}"
+      webhook_configured: "{{ paper_join_notifier_discord_webhook_url | length > 0 }}"

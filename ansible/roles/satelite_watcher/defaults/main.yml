@@ -1,0 +1,195 @@
+---
+satelite_watcher_enabled: false
+
+satelite_watcher_user: satelite-watcher
+satelite_watcher_group: satelite-watcher
+satelite_watcher_sdr_access_group: plugdev
+satelite_watcher_output_base_dir: "/mnt/data/files/Satelite Data recs"
+satelite_watcher_recordings_dir: "{{ satelite_watcher_output_base_dir }}"
+satelite_watcher_repair_recording_directory_ownership: true
+satelite_watcher_repair_recording_directory_ownership_maxdepth: 6
+
+satelite_watcher_root: "/opt/satelite-watcher"
+satelite_watcher_bin_dir: "{{ satelite_watcher_root }}/bin"
+satelite_watcher_config_dir: "{{ satelite_watcher_root }}/config"
+satelite_watcher_state_dir: "{{ satelite_watcher_root }}/state"
+satelite_watcher_pass_metadata_dir: "{{ satelite_watcher_state_dir }}/pass_metadata"
+satelite_watcher_logs_dir: "{{ satelite_watcher_root }}/logs"
+satelite_watcher_venv_path: "{{ satelite_watcher_root }}/.venv"
+satelite_watcher_python_bin: "{{ satelite_watcher_venv_path }}/bin/python"
+satelite_watcher_xdg_config_home: "{{ satelite_watcher_root }}/.config"
+satelite_watcher_satdump_user_config_dir: "{{ satelite_watcher_xdg_config_home }}/satdump"
+
+satelite_watcher_scheduler_service_name: satelite-watcher-schedule
+satelite_watcher_record_service_name: satelite-watcher-record
+satelite_watcher_scheduler_user: root
+satelite_watcher_scheduler_group: root
+
+satelite_watcher_satdump_bin: /usr/local/bin/satdump
+satelite_watcher_validate_sdr_probe: false
+satelite_watcher_satdump_manage_install: true
+satelite_watcher_satdump_version: ""
+satelite_watcher_satdump_repo: "https://github.com/SatDump/SatDump.git"
+satelite_watcher_satdump_install_prefix: /usr/local
+satelite_watcher_satdump_library_path: /usr/local/lib
+satelite_watcher_satdump_ldconfig_conf: /etc/ld.so.conf.d/satdump-local.conf
+satelite_watcher_rtlsdr_udev_rules_file: /etc/udev/rules.d/99-satelite-watcher-rtlsdr.rules
+satelite_watcher_satdump_source_dir: "/usr/local/src/satdump-{{ satelite_watcher_satdump_version }}"
+satelite_watcher_satdump_build_dir: "{{ satelite_watcher_satdump_source_dir }}/build"
+satelite_watcher_satdump_build_gui: false
+satelite_watcher_satdump_build_jobs: 4
+
+satelite_watcher_satdump_build_packages:
+  - git
+  - build-essential
+  - cmake
+  - g++
+  - pkgconf
+  - libfftw3-dev
+  - libpng-dev
+  - libtiff-dev
+  - libjemalloc-dev
+  - libcurl4-openssl-dev
+  - libsqlite3-dev
+  - libnng-dev
+  - librtlsdr-dev
+  - libarmadillo-dev
+  - libomp-dev
+
+satelite_watcher_satdump_volk_packages:
+  - libvolk-dev
+  - libvolk2-dev
+  - libvolk1-dev
+
+satelite_watcher_python_packages:
+  - PyYAML>=6.0
+  - requests>=2.31.0
+  - skyfield>=1.49
+  - beautifulsoup4>=4.12.0
+
+satelite_watcher_sdr_source: rtlsdr
+satelite_watcher_sdr_device_id: 0
+satelite_watcher_sdr_gain: 18
+satelite_watcher_sdr_samplerate: 2400000
+satelite_watcher_sdr_baseband_format: cs16
+satelite_watcher_record_frequency_offset_hz: 0
+satelite_watcher_decode_after_record_enabled: true
+satelite_watcher_decode_pipeline: meteor_m2-x_lrpt
+satelite_watcher_decode_source_mode: baseband
+satelite_watcher_decode_freq_shift_hz: "{{ (satelite_watcher_record_frequency_offset_hz | int) * -1 }}"
+satelite_watcher_decode_dc_block: false
+satelite_watcher_decode_iq_swap: false
+satelite_watcher_decode_output_dir_name: decoded
+satelite_watcher_images_output_dir_name: images
+satelite_watcher_decode_target_satellites:
+  - METEOR-M N2-4
+  - METEOR-M N2-3
+
+satelite_watcher_generate_image_after_decode_enabled: true
+
+satelite_watcher_noaa_apt_enabled: false
+satelite_watcher_decode_noaa_apt_enabled: true
+satelite_watcher_decode_noaa_apt_pipeline: noaa_apt
+satelite_watcher_decode_noaa_apt_source_mode: baseband
+satelite_watcher_decode_noaa_apt_freq_shift_hz: "{{ (satelite_watcher_record_frequency_offset_hz | int) * -1 }}"
+satelite_watcher_decode_noaa_apt_dc_block: false
+satelite_watcher_decode_noaa_apt_iq_swap: false
+satelite_watcher_decode_noaa_apt_output_dir_name: decoded
+satelite_watcher_decode_noaa_apt_target_satellites:
+  - NOAA-15
+  - NOAA-18
+  - NOAA-19
+satelite_watcher_noaa_apt_satellites:
+  - name: NOAA-15
+    tle_name: NOAA 15
+    norad_id: 25338
+    frequency_hz: 137620000
+  - name: NOAA-18
+    tle_name: NOAA 18
+    norad_id: 28654
+    frequency_hz: 137912500
+  - name: NOAA-19
+    tle_name: NOAA 19
+    norad_id: 33591
+    frequency_hz: 137100000
+
+satelite_watcher_location_latitude: 46.7557
+satelite_watcher_location_longitude: 23.5605
+satelite_watcher_location_altitude_m: 10
+satelite_watcher_timezone: Europe/Bucharest
+
+satelite_watcher_lookahead_hours: 36
+satelite_watcher_interval_minutes: 10
+satelite_watcher_pre_record_seconds: 90
+satelite_watcher_post_record_seconds: 60
+satelite_watcher_timeout_padding_seconds: 180
+satelite_watcher_recording_paused: false
+satelite_watcher_recording_pause_reason: ""
+
+satelite_watcher_filter_mode: filtered
+satelite_watcher_min_elevation_deg: 40
+satelite_watcher_allowed_peak_azimuths: []
+satelite_watcher_frequency_plan_validated: false
+
+satelite_watcher_retention_days: 21
+
+satelite_watcher_tle_cache_file: "{{ satelite_watcher_state_dir }}/tles.json"
+satelite_watcher_passes_file: "{{ satelite_watcher_state_dir }}/passes.json"
+satelite_watcher_scheduled_file: "{{ satelite_watcher_state_dir }}/scheduled.json"
+satelite_watcher_notifications_file: "{{ satelite_watcher_state_dir }}/notifications.json"
+satelite_watcher_weather_tle_url: "https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=TLE"
+satelite_watcher_stations_tle_url: "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=TLE"
+satelite_watcher_tle_user_agent: "tresor-satelite-watcher/1.0"
+satelite_watcher_space_track_enabled: false
+satelite_watcher_space_track_login_url: "https://www.space-track.org/ajaxauth/login"
+satelite_watcher_space_track_query_base_url: "https://www.space-track.org/basicspacedata/query"
+satelite_watcher_space_track_username: ""
+satelite_watcher_space_track_password: ""
+satelite_watcher_iss_sstv_events_file: "{{ satelite_watcher_state_dir }}/iss_sstv_events.json"
+satelite_watcher_notify_env_file: "{{ satelite_watcher_config_dir }}/satelite-watcher-notify.env"
+satelite_watcher_discord_webhook_url: ""
+satelite_watcher_notify_weather_prepass_enabled: true
+satelite_watcher_notify_weather_prepass_timing: night_before
+satelite_watcher_notify_weather_prepass_night_before_hour: 20
+satelite_watcher_notify_weather_prepass_night_before_minute: 0
+satelite_watcher_notify_weather_prepass_lead_minutes: 1440
+satelite_watcher_notify_weather_prepass_digest_days: 1
+satelite_watcher_notify_weather_prepass_max_passes_per_day: 8
+satelite_watcher_notify_weather_prepass_priority_satellites: []
+satelite_watcher_notify_weather_prepass_min_elevation_deg: 40
+satelite_watcher_notify_weather_prepass_peak_azimuths: []
+satelite_watcher_notify_weather_prepass_decode_profiles:
+  - meteor_lrpt
+  - noaa_apt
+satelite_watcher_notify_weather_image_enabled: false
+satelite_watcher_notify_weather_image_min_elevation_deg: 40
+satelite_watcher_notify_weather_image_peak_azimuths: []
+satelite_watcher_notify_weather_image_decode_profiles:
+  - meteor_lrpt
+  - noaa_apt
+satelite_watcher_notify_meteor_prepass_enabled: false
+satelite_watcher_notify_meteor_prepass_lead_minutes: 60
+satelite_watcher_notify_meteor_prepass_min_elevation_deg: 60
+satelite_watcher_notify_meteor_prepass_peak_azimuths: []
+satelite_watcher_notify_meteor_good_pass_enabled: false
+satelite_watcher_notify_meteor_good_pass_min_elevation_deg: 60
+satelite_watcher_notify_meteor_good_pass_peak_azimuths: []
+satelite_watcher_notify_iss_sstv_on_announcement: true
+satelite_watcher_notify_iss_sstv_on_start: true
+satelite_watcher_iss_sstv_enabled: false
+satelite_watcher_iss_sstv_tle_name: "ISS (ZARYA)"
+satelite_watcher_iss_sstv_norad_id: 25544
+satelite_watcher_iss_sstv_events_url: "https://www.ariss.org/upcoming-sstv-events.html"
+satelite_watcher_iss_sstv_gallery_url: "https://ariss-usa.org/ARISS_SSTV/index.php"
+satelite_watcher_iss_sstv_default_frequency_hz: 145800000
+satelite_watcher_iss_sstv_default_mode: "PD120"
+
+satelite_watcher_satellites:
+  - name: METEOR-M N2-4
+    tle_name: METEOR-M2 4
+    norad_id: 59051
+    frequency_hz: 137900000
+  - name: METEOR-M N2-3
+    tle_name: METEOR M2-3
+    norad_id: 57166
+    frequency_hz: 137900000

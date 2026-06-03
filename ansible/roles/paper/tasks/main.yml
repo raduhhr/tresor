@@ -6,9 +6,8 @@
   ansible.builtin.assert:
     that:
       - paper_data_dir is defined
-      - mc_net is defined
       - wg_bind_ip is defined         # host WireGuard IP on Tresor (e.g., 10.66.66.2)
-    fail_msg: "paper_data_dir/mc_net/wg_bind_ip missing."
+    fail_msg: "paper_data_dir/wg_bind_ip missing."
 
 ############################
 # 0.1) Preflight on host
@@ -19,11 +18,6 @@
     name: python3-docker
     state: present
     update_cache: yes
-
-- name: Ensure mc_net exists
-  community.docker.docker_network:
-    name: "{{ mc_net }}"
-    state: present
 
 - name: Wait until WireGuard IP is configured on wg0
   ansible.builtin.shell: "ip -o addr show dev wg0 | grep -q '{{ wg_bind_ip }}/'"
@@ -184,7 +178,7 @@
       RCON_PASSWORD: "{{ paper_rcon_password | default(omit) }}"
       RCON_PORT: "{{ paper_rcon_port | default('25575') }}"
       USE_BUILTIN_DOWNLOADS: "TRUE"
-      TZ: "{{ paper_timezone | default(paper_tz | default('UTC')) }}"
+      TZ: "{{ paper_timezone | default(paper_tz | default('Europe/Bucharest')) }}"
       SERVER_IP: "{{ wg_bind_ip }}"
       SERVER_PORT: "25565"
 

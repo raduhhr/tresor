@@ -1,5 +1,5 @@
 ---
-- name: Start Jellyfin Music
+- name: Start Jellyfin Media
   hosts: tresor
   become: true
   gather_facts: false
@@ -8,7 +8,7 @@
     container_name: jellyfin-music
 
   tasks:
-    - name: Ensure Jellyfin Music container is started
+    - name: Ensure Jellyfin Media container is started
       community.docker.docker_container:
         name: "{{ container_name }}"
         state: started
@@ -16,5 +16,5 @@
 
     - name: Show status after start
       ansible.builtin.debug:
-        msg: "Jellyfin Music started successfully"
+        msg: "Jellyfin Media started successfully"
       when: _start.changed

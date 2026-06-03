@@ -23,7 +23,7 @@
 
     # Timestamped filename
     content_notifier_backup_filename: >-
-      content-notifier-{{ inventory_hostname }}-{{ ansible_date_time.iso8601_basic_short }}.tar.gz
+      content-notifier-{{ inventory_hostname }}-{{ ansible_facts.date_time.iso8601_basic_short }}.tar.gz
     content_notifier_backup_path: "{{ content_notifier_backup_dir }}/{{ content_notifier_backup_filename }}"
 
   tasks:

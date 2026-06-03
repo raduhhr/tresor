@@ -1,0 +1,16 @@
+---
+# uptime_kuma_image must come from tresor_versions (group_vars/prod/versions.yml).
+# This fallback is intentionally unset — the role will fail loudly if versions.yml
+# is not loaded, rather than deploying an arbitrary tag.
+uptime_kuma_image: "{{ tresor_versions.uptime_kuma_image }}"
+
+uptime_kuma_config_dir: "/mnt/ssd/configs/uptime-kuma"
+uptime_kuma_public_host: "status.raduhhr.xyz"
+# Keep the existing Kuma status page slug until the page itself is renamed in the DB/UI.
+uptime_kuma_public_status_slug: "tresor"
+uptime_kuma_public_status_title: "Tresor Status"
+
+uptime_kuma_sync_username: "admin"
+uptime_kuma_sync_password: ""
+uptime_kuma_public_group_name: "Public Services"
+uptime_kuma_public_monitors: []

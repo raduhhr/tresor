@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Tresor Minecraft metrics collector
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec={{ prometheus_minecraft_metrics_interval_seconds }}s
+AccuracySec=5s
+Unit={{ prometheus_minecraft_metrics_service_name }}.service
+
+[Install]
+WantedBy=timers.target

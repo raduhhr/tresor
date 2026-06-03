@@ -1,0 +1,8 @@
+---
+- name: "VPS | prepare restricted vot-FE GitHub deploy user"
+  hosts: vps
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: vot-fe-deploy

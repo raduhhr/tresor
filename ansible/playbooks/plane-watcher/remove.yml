@@ -1,0 +1,21 @@
+---
+- name: Remove Plane Watcher runtime
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    plane_watcher_purge_data: false
+
+  tasks:
+    - name: Remove Plane Watcher container
+      community.docker.docker_container:
+        name: plane-watcher
+        state: absent
+      failed_when: false
+
+    - name: Optionally purge Plane Watcher data tree
+      ansible.builtin.file:
+        path: /mnt/ssd/configs/plane-watcher
+        state: absent
+      when: plane_watcher_purge_data | bool

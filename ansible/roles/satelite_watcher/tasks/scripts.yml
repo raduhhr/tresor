@@ -1,0 +1,13 @@
+---
+- name: Install Satelite Watcher helper scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ satelite_watcher_bin_dir }}/{{ item.dest }}"
+    owner: "{{ satelite_watcher_user }}"
+    group: "{{ satelite_watcher_group }}"
+    mode: "0755"
+  loop:
+    - { src: "update_tles.py.j2", dest: "update_tles.py" }
+    - { src: "build_pass_schedule.py.j2", dest: "build_pass_schedule.py" }
+    - { src: "record_pass.sh.j2", dest: "record_pass.sh" }
+    - { src: "cleanup_old_recordings.sh.j2", dest: "cleanup_old_recordings.sh" }

@@ -9,9 +9,7 @@
       community.docker.docker_network:
         name: "{{ item }}"
         state: present
-      loop:
-        - internal_net
-        - lan_pub
+      loop: "{{ grafana_networks }}"
 
   roles:
     - role: grafana

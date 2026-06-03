@@ -1,0 +1,112 @@
+---
+- name: Download Kiwix backup from R2
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/kiwix"
+    staging_dir: "{{ backup_dir }}/offsite"
+    staged_restore_file: "{{ staging_dir }}/latest-kiwix-backup.tar.gz"
+    r2_remote_prefix: "{{ tresor_r2_backup_prefix | default('backups') }}/kiwix"
+    r2_upload_image: "{{ tresor_versions.rclone_image }}"
+    r2_remote_name: "TRESORR2"
+    r2_region: "{{ tresor_r2_region | default('auto') }}"
+    r2_env_file: "/tmp/kiwix-r2.env"
+
+  tasks:
+    - name: Assert R2 restore settings are present
+      ansible.builtin.assert:
+        that:
+          - tresor_r2_bucket | default('') | length > 0
+          - tresor_r2_endpoint | default('') | length > 0
+          - vault_tresor_r2_access_key_id | default('') | length > 0
+          - vault_tresor_r2_secret_access_key | default('') | length > 0
+        fail_msg: "Missing required R2 backup vars for Kiwix offsite restore."
+
+    - name: Ensure local offsite staging directory exists
+      ansible.builtin.file:
+        path: "{{ staging_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write temporary R2 env file for Kiwix restore
+      no_log: true
+      ansible.builtin.copy:
+        dest: "{{ r2_env_file }}"
+        mode: "0600"
+        content: |
+          RCLONE_CONFIG_{{ r2_remote_name }}_TYPE=s3
+          RCLONE_CONFIG_{{ r2_remote_name }}_PROVIDER=Cloudflare
+          RCLONE_CONFIG_{{ r2_remote_name }}_ACCESS_KEY_ID={{ vault_tresor_r2_access_key_id }}
+          RCLONE_CONFIG_{{ r2_remote_name }}_SECRET_ACCESS_KEY={{ vault_tresor_r2_secret_access_key }}
+          RCLONE_CONFIG_{{ r2_remote_name }}_REGION={{ r2_region }}
+          RCLONE_CONFIG_{{ r2_remote_name }}_ENDPOINT={{ tresor_r2_endpoint }}
+          RCLONE_CONFIG_{{ r2_remote_name }}_NO_CHECK_BUCKET=true
+
+    - name: Download Kiwix backup from R2
+      block:
+        - name: Determine remote Kiwix backup object
+          when: r2_backup_object is not defined
+          ansible.builtin.shell: >
+            docker run --rm
+            --env-file {{ r2_env_file | quote }}
+            {{ r2_upload_image | quote }}
+            lsl {{ r2_remote_name }}:{{ tresor_r2_bucket }}/{{ r2_remote_prefix }} |
+            sort -k2,2 -k3,3 |
+            tail -1 |
+            awk "{print \$4}"
+          register: _latest_remote_backup
+          changed_when: false
+
+        - name: Set selected remote Kiwix backup object
+          ansible.builtin.set_fact:
+            _selected_r2_backup_object: >-
+              {{
+                (r2_backup_object | default(''))
+                if (r2_backup_object is defined)
+                else (_latest_remote_backup.stdout | trim)
+              }}
+
+        - name: Fail if no remote Kiwix backup exists
+          ansible.builtin.fail:
+            msg: "No remote Kiwix backup found in r2://{{ tresor_r2_bucket }}/{{ r2_remote_prefix }}"
+          when: _selected_r2_backup_object | length == 0
+
+        - name: Download selected Kiwix backup from R2
+          ansible.builtin.shell: >
+            docker run --rm
+            --env-file {{ r2_env_file | quote }}
+            -v {{ staging_dir | quote }}:/restore
+            {{ r2_upload_image | quote }}
+            copyto
+            {{ r2_remote_name }}:{{ tresor_r2_bucket }}/{{ r2_remote_prefix }}/{{ _selected_r2_backup_object }}
+            /restore/{{ staged_restore_file | basename }}
+
+        - name: Stat downloaded Kiwix restore tarball
+          ansible.builtin.stat:
+            path: "{{ staged_restore_file }}"
+          register: _staged_restore
+
+        - name: Fail if R2 download did not produce a restore tarball
+          ansible.builtin.fail:
+            msg: "R2 download failed to produce {{ staged_restore_file }}"
+          when: not _staged_restore.stat.exists
+
+        - name: Show downloaded Kiwix offsite restore object
+          ansible.builtin.debug:
+            msg:
+              remote_object: "r2://{{ tresor_r2_bucket }}/{{ r2_remote_prefix }}/{{ _selected_r2_backup_object }}"
+              staged_file: "{{ staged_restore_file }}"
+      always:
+        - name: Remove temporary R2 env file for Kiwix restore
+          ansible.builtin.file:
+            path: "{{ r2_env_file }}"
+            state: absent
+          failed_when: false
+
+- import_playbook: restore.yml
+  vars:
+    backup_file: "/mnt/data/files/Backups/kiwix/offsite/latest-kiwix-backup.tar.gz"

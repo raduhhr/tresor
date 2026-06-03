@@ -1,0 +1,24 @@
+---
+- name: Ensure Satelite Watcher group exists
+  ansible.builtin.group:
+    name: "{{ satelite_watcher_group }}"
+    state: present
+    system: true
+
+- name: Ensure SDR access group exists
+  ansible.builtin.group:
+    name: "{{ satelite_watcher_sdr_access_group }}"
+    state: present
+    system: true
+
+- name: Ensure Satelite Watcher user exists
+  ansible.builtin.user:
+    name: "{{ satelite_watcher_user }}"
+    group: "{{ satelite_watcher_group }}"
+    groups:
+      - "{{ satelite_watcher_sdr_access_group }}"
+    append: true
+    home: "{{ satelite_watcher_root }}"
+    shell: /usr/sbin/nologin
+    create_home: false
+    system: true

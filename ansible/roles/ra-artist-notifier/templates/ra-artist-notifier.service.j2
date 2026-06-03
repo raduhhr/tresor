@@ -1,0 +1,17 @@
+[Unit]
+Description=Resident Advisor artist event Discord notifier
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User={{ ra_artist_notifier_run_user }}
+Group={{ ra_artist_notifier_run_group }}
+EnvironmentFile={{ ra_artist_notifier_env_file }}
+ExecStart={{ ra_artist_notifier_python_bin }} {{ ra_artist_notifier_script_path }}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ ra_artist_notifier_config_dir }}

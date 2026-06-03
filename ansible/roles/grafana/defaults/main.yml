@@ -13,7 +13,7 @@ grafana_config_dir: "/mnt/ssd/configs/grafana"
 grafana_data_dir: "/mnt/ssd/configs/grafana/data"
 
 grafana_port: 3000
-grafana_bind_addr: "192.168.1.100"
+grafana_bind_addr: "192.0.2.10"
 # Enable host publishing (LAN) by default for convenience
 grafana_expose_host_port: true
 grafana_host_port: 3000
@@ -22,7 +22,7 @@ grafana_admin_user: "admin"
 grafana_admin_password: "changeme"
 
 # Traefik OFF by default for Grafana (you can turn ON via group_vars if needed)
-grafana_domain: "grafana.example.com"
+grafana_domain: "grafana.raduhhr.xyz"
 grafana_enable_traefik: false
 grafana_traefik_entrypoint: "web"
 grafana_traefik_middlewares: "chain-secure@file"
@@ -31,8 +31,69 @@ grafana_traefik_middlewares: "chain-secure@file"
 grafana_root_url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}"
 grafana_serve_from_sub_path: false
 
-grafana_tz: "UTC"
+grafana_tz: "Europe/Bucharest"
 
 grafana_allow_embedding: false
 grafana_cookie_secure: false
 grafana_cookie_samesite: "lax"
+
+grafana_install_plugins: []
+grafana_manage_dashboards: false
+grafana_dashboard_export_titles:
+  - "Virtualization - Docker"
+  - "Host"
+  - "Tresor Minecraft Server"
+  - "Real Estate Listings"
+  - "News Overview"
+  - "Romanian News Feed"
+  - "Tech News Feed"
+  - "Parliament Votes"
+
+grafana_managed_folders:
+  - uid: "tresor"
+    title: "Tresor"
+  - uid: "tresor-index"
+    title: "Tresor Index"
+  - uid: "minecraft"
+    title: "Minecraft"
+
+grafana_managed_dashboards:
+  - file: "virtualization-docker.json"
+    folder_uid: "tresor"
+  - file: "host-overview.json"
+    folder_uid: "tresor"
+  - file: "tresor-minecraft-server.json"
+    folder_uid: "minecraft"
+  - file: "real-estate-listings.json"
+    folder_uid: "tresor-index"
+  - file: "news-overview.json"
+    folder_uid: "tresor-index"
+  - file: "romanian-news-feed.json"
+    folder_uid: "tresor-index"
+  - file: "tech-news-feed.json"
+    folder_uid: "tresor-index"
+  - file: "parliament-votes.json"
+    folder_uid: "tresor-index"
+  - file: "tresor-index-runtime.json"
+    folder_uid: "tresor-index"
+
+grafana_retired_dashboard_uids:
+  - "tresor-index"
+  - "tresor-index-imobiliare"
+  - "tresor-index-listings-bucharest"
+  - "tresor-index-listings-cluj-houses"
+  - "tresor-index-listings-cluj-apartments"
+  - "tresor-index-news"
+  - "tresor-index-romanian-news"
+  - "tresor-index-tech-news"
+  - "real-estate-listings-bucharest"
+  - "real-estate-listings-cluj"
+
+grafana_tresor_index_datasource_enabled: true
+grafana_tresor_index_datasource_name: "Tresor Index"
+grafana_tresor_index_datasource_uid: "tresor-index-postgres"
+grafana_tresor_index_db_host: "tresor-index-db"
+grafana_tresor_index_db_port: 5432
+grafana_tresor_index_db_name: "{{ tresor_index_db_name | default('tresor_index') }}"
+grafana_tresor_index_db_user: "{{ tresor_index_grafana_db_user | default('tresor_index_grafana') }}"
+grafana_tresor_index_db_password: "{{ tresor_index_grafana_db_password | default(vault_tresor_index_grafana_db_password | default(vault_tresor_index_db_password | default('tresor_index_local_only_change_me'))) }}"

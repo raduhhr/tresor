@@ -1,0 +1,170 @@
+---
+- name: "[vot] Ensure ACME webroot exists"
+  become: true
+  ansible.builtin.file:
+    path: /var/www/html
+    state: directory
+    mode: "0755"
+
+- name: "[vot] Stat LE cert for {{ nginx_vot_domain }}"
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ nginx_vot_domain }}/fullchain.pem"
+  register: _vot_cert
+
+- name: "[vot] Render HTTP bootstrap config"
+  become: true
+  ansible.builtin.template:
+    src: vot.http.nginx.j2
+    dest: "/etc/nginx/sites-available/{{ nginx_vot_config_name }}"
+    mode: "0644"
+  when:
+    - not (nginx_vot_enable_tls | bool and _vot_cert.stat.exists | bool)
+
+- name: "[vot] Enable vhost symlink"
+  become: true
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/{{ nginx_vot_config_name }}"
+    dest: "/etc/nginx/sites-enabled/{{ nginx_vot_config_name }}"
+    state: link
+
+- name: "[vot] nginx -t (bootstrap)"
+  become: true
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  when:
+    - not (nginx_vot_enable_tls | bool and _vot_cert.stat.exists | bool)
+
+- name: "[vot] Reload nginx (bootstrap live)"
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when:
+    - not (nginx_vot_enable_tls | bool and _vot_cert.stat.exists | bool)
+
+- name: "[vot] Resolve ACME email"
+  ansible.builtin.set_fact:
+    _vot_acme_email: >-
+      {{
+        (nginx_music_acme_email | default(''))
+        if (nginx_music_acme_email | default('') | length > 0
+            and nginx_music_acme_email | default('') != 'you@domain.tld')
+        else (vault_acme_email | default(''))
+      }}
+  when: nginx_vot_enable_tls | bool
+
+- name: "[vot] Assert ACME email is set"
+  ansible.builtin.assert:
+    that: _vot_acme_email | length > 0
+    fail_msg: >-
+      No ACME email found. Set nginx_music_acme_email or vault_acme_email.
+  when:
+    - nginx_vot_enable_tls | bool
+    - nginx_vot_obtain_cert | bool or _vot_cert.stat.exists | bool
+
+- name: "[vot] Obtain LE cert via certbot (webroot)"
+  become: true
+  ansible.builtin.shell: >
+    certbot certonly
+    --webroot
+    --webroot-path /var/www/html
+    -d {{ nginx_vot_domain }}
+    {% for alias in nginx_vot_aliases | default([]) %}
+    -d {{ alias }}
+    {% endfor %}
+    --agree-tos
+    --email {{ _vot_acme_email }}
+    --non-interactive
+  register: _vot_certbot
+  when:
+    - nginx_vot_enable_tls | bool
+    - nginx_vot_obtain_cert | bool
+    - not _vot_cert.stat.exists
+  failed_when: >-
+    (_vot_certbot.rc | default(0) != 0)
+    and
+    (
+      'unauthorized'
+      not in (((_vot_certbot.stdout | default('')) ~ ' ' ~ (_vot_certbot.stderr | default(''))) | lower)
+    )
+    and
+    (
+      'invalid response from http://'
+      not in (((_vot_certbot.stdout | default('')) ~ ' ' ~ (_vot_certbot.stderr | default(''))) | lower)
+    )
+    and
+    (
+      'dns problem'
+      not in (((_vot_certbot.stdout | default('')) ~ ' ' ~ (_vot_certbot.stderr | default(''))) | lower)
+    )
+  changed_when: _vot_certbot.rc | default(1) == 0
+
+- name: "[vot] Show certbot stderr on failure"
+  ansible.builtin.debug:
+    msg: "{{ _vot_certbot.stderr | default('(no output)') }}"
+  when:
+    - nginx_vot_enable_tls | bool
+    - nginx_vot_obtain_cert | bool
+    - not _vot_cert.stat.exists
+    - _vot_certbot.rc | default(0) != 0
+
+- name: "[vot] Explain TLS pending after bootstrap"
+  ansible.builtin.debug:
+    msg:
+      - "Bootstrap vhost is live, but TLS was not enabled yet."
+      - "After Cloudflare DNS for {{ nginx_vot_domain }} points to this VPS, rerun this playbook and certbot should complete."
+  when:
+    - nginx_vot_enable_tls | bool
+    - nginx_vot_obtain_cert | bool
+    - not _vot_cert.stat.exists
+    - _vot_certbot.rc | default(0) != 0
+
+- name: "[vot] Initialize post-cert state"
+  ansible.builtin.set_fact:
+    _vot_cert_after:
+      stat:
+        exists: false
+
+- name: "[vot] Preserve existing cert state when already present"
+  ansible.builtin.set_fact:
+    _vot_cert_after: "{{ _vot_cert }}"
+  when:
+    - nginx_vot_enable_tls | bool
+    - _vot_cert.stat.exists | bool
+
+- name: "[vot] Re-stat cert after certbot"
+  become: true
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ nginx_vot_domain }}/fullchain.pem"
+  register: _vot_cert_after
+  when:
+    - nginx_vot_enable_tls | bool
+    - nginx_vot_obtain_cert | bool
+
+- name: "[vot] Render TLS reverse proxy config"
+  become: true
+  ansible.builtin.template:
+    src: vot.tls.nginx.j2
+    dest: "/etc/nginx/sites-available/{{ nginx_vot_config_name }}"
+    mode: "0644"
+  when:
+    - nginx_vot_enable_tls | bool
+    - _vot_cert_after.stat.exists | bool
+
+- name: "[vot] nginx -t (TLS)"
+  become: true
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  when:
+    - nginx_vot_enable_tls | bool
+    - _vot_cert_after.stat.exists | bool
+
+- name: "[vot] Reload nginx (TLS config live)"
+  become: true
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when:
+    - nginx_vot_enable_tls | bool
+    - _vot_cert_after.stat.exists | bool

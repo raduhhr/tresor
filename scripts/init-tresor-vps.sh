@@ -12,7 +12,7 @@ usermod -aG sudo ansible
 
 # 2) Install SSH key for 'ansible'
 install -d -m 700 -o ansible -g ansible /home/ansible/.ssh
-# Reuse the same key your-vps-provider injected for root:
+# Reuse the same key Hetzner injected for root:
 if [ -f /root/.ssh/authorized_keys ]; then
   install -m 600 -o ansible -g ansible /root/.ssh/authorized_keys /home/ansible/.ssh/authorized_keys
 else

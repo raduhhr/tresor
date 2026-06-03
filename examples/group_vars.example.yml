@@ -1,0 +1,13 @@
+---
+# Inert example only. Real values live outside the public repo.
+
+tresor_domain: example.com
+lan_cidr: 192.0.2.0/24
+wireguard_cidr: 10.0.0.0/24
+
+cloudflared:
+  token: "{{ vault_cloudflared_token }}"
+
+grafana_admin_password: "{{ vault_grafana_admin_password }}"
+discord_webhook_url: "{{ vault_discord_webhook_url }}"
+r2_secret_access_key: "{{ vault_r2_secret_access_key }}"

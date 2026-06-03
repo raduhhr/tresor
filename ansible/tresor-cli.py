@@ -55,15 +55,19 @@ C_BAR_HIGH = "#f87171"  # red
 C_DOT_ON = "#60a5fa"
 C_DOT_OFF = "#f87171"
 
-NET_COLOR = {"public": "#60a5fa", "internal": "#c084fc", "wg": "#34d399", "cron": "#fbbf24"}
-NET_BADGE = {"public": "☁", "internal": "⌂", "wg": "⇄", "cron": "⏲"}
-NET_ORDER = {"internal": 0, "public": 1, "wg": 2, "cron": 3}
+NET_COLOR = {"public": "#60a5fa", "internal": "#c084fc", "wg": "#34d399", "sched": "#fbbf24", "systemd": C_MID}
+NET_BADGE = {"public": "P", "internal": "I", "wg": "W", "sched": "A", "systemd": "D"}
+NET_ORDER = {"internal": 0, "public": 1, "wg": 2, "sched": 3, "systemd": 4}
 
 STATE_COLOR = {
     "running": C_BAR_LOW,
     "restart": C_BAR_MID,
     "created": C_BAR_MID,
     "cron": C_DIM,
+    "systemd": C_MID,
+    "timer": C_BAR_LOW,
+    "idle": C_BAR_MID,
+    "failed": C_RED,
     "exited": C_DIM,
     "stopped": C_DIM,
 }
@@ -81,24 +85,30 @@ PLAY_LABEL = {
 }
 
 SKIP_SERVICES = {"infra", "vps", "motd"}
-CRON_SERVICES = {"bday-notifier", "steam-free-notifier", "content-notifier"}
-OWN_SERVICES = {"bday-notifier", "steam-free-notifier"}
+TIMER_SERVICES = {"bday-notifier", "steam-free-notifier", "content-notifier"}
+OWN_SERVICES = {"bday-notifier", "steam-free-notifier", "content-notifier", "ra-artist-notifier"}
 
 SVC_META: Dict[str, Dict[str, Any]] = {
     "traefik": {"net": "public", "container": "traefik", "url": "", "desc": "reverse proxy"},
     "cloudflared": {"net": "public", "container": "cloudflared", "url": "", "desc": "Cloudflare Tunnel"},
-    "uptime-kuma": {"net": "public", "container": "uptime-kuma", "url": "https://mc-status.example.com", "desc": "status page"},
-    "jellyfin": {"net": "internal", "container": "jellyfin", "url": "http://192.168.1.100:8096", "desc": "media server"},
-    "jellyfin-music": {"net": "wg", "container": "jellyfin-music", "url": "https://music.example.com", "desc": "music via VPS→WG"},
-    "grafana": {"net": "internal", "container": "grafana", "url": "http://192.168.1.100:3000", "desc": "dashboards"},
-    "prometheus": {"net": "internal", "container": "prometheus", "url": "http://192.168.1.100:9090", "desc": "metrics"},
-    "filebrowser": {"net": "internal", "container": "filebrowser", "url": "http://192.168.1.100:8080", "desc": "file manager"},
-    "kiwix": {"net": "internal", "container": "kiwix", "url": "http://192.168.1.100:8181", "desc": "offline Wikipedia"},
-    "paper": {"net": "wg", "container": "paper", "url": "1.2.3.4:25565", "desc": "Minecraft Paper"},
-    "bday-notifier": {"net": "cron", "container": None, "url": "", "desc": "birthday webhook"},
-    "content-notifier": {"net": "cron", "container": None, "url": "", "desc": "new content webhook"},
-    "steam-free-notifier": {"net": "cron", "container": None, "url": "", "desc": "Steam free games bot"},
-    "filebrowser-public": {"net": "wg", "container": "filebrowser-public", "url": "https://cloud.example.com", "desc": "Scloud drop (friends)"}
+    "uptime-kuma": {"net": "public", "container": "uptime-kuma", "url": "https://status.raduhhr.xyz", "desc": "status page"},
+    "jellyfin": {"net": "internal", "container": "jellyfin", "url": "http://192.0.2.10:8096", "desc": "media server"},
+    "jellyfin-music": {"net": "wg", "container": "jellyfin-music", "url": "https://media.raduhhr.xyz", "desc": "media via VPS→WG"},
+    "grafana": {"net": "internal", "container": "grafana", "url": "http://192.0.2.10:3000", "desc": "dashboards"},
+    "prometheus": {"net": "internal", "container": "prometheus", "url": "http://192.0.2.10:9090", "desc": "metrics"},
+    "filebrowser": {"net": "internal", "container": "filebrowser", "url": "http://192.0.2.10:8080", "desc": "file manager"},
+    "kiwix": {"net": "internal", "container": "kiwix", "url": "http://192.0.2.10:8181", "desc": "offline Wikipedia"},
+    "satelite-watcher": {"net": "sched", "container": None, "url": "", "desc": "satellite pass scheduler", "kind": "systemd", "unit": "satelite-watcher-schedule.timer", "active_glob": "satelite-watcher-record@*.service"},
+    "plane-watcher": {"net": "public", "container": "plane-watcher", "url": "https://planes.raduhhr.xyz", "desc": "ADS-B aircraft watcher", "show_latest_tag": True},
+    "paper": {"net": "wg", "container": "paper", "url": "203.0.113.10:25565", "desc": "Minecraft Paper"},
+    "bday-notifier": {"net": "sched", "container": None, "url": "", "desc": "birthday webhook"},
+    "content-notifier": {"net": "sched", "container": None, "url": "", "desc": "new content webhook"},
+    "steam-free-notifier": {"net": "sched", "container": None, "url": "", "desc": "Steam free games bot"},
+    "tresor-index": {"net": "internal", "container": "tresor-index-scheduler", "url": "", "desc": "personal data index"},
+    "filebrowser-public": {"net": "wg", "container": "filebrowser-public", "url": "https://cloud.raduhhr.xyz", "desc": "Scloud drop (friends)"},
+    "paper-join-notifier": {"net": "systemd", "container": None, "url": "", "desc": "Minecraft join webhook", "kind": "systemd", "unit": "paper-join-notifier.service"},
+    "ra-artist-notifier": {"net": "sched", "container": None, "url": "", "desc": "RA event webhook", "kind": "systemd", "unit": "ra-artist-notifier.timer"},
+    "yt-downloader": {"net": "sched", "container": None, "url": "", "desc": "liked videos ingest", "kind": "systemd", "unit": "batchyt-liked.timer"}
 }
 
 console = Console()
@@ -275,14 +285,15 @@ def q_select(message: str, choices: List[Choice]):
         use_indicator=False,   # <-- removes empty circles
     )
 
+    hidden_instruction = " "
     attempts = [
-        dict(base, instruction="", qmark="", pointer=">"),
+        dict(base, instruction=hidden_instruction, qmark="", pointer=">"),
         dict(base, instructions="", qmark="", pointer=">"),
         dict(base, instructions=[], qmark="", pointer=">"),
-        dict(base, instruction="", pointer=">"),
+        dict(base, instruction=hidden_instruction, pointer=">"),
         dict(base, qmark="", pointer=">"),
         dict(base, pointer=">"),
-        dict(base, instruction="", qmark=""),
+        dict(base, instruction=hidden_instruction, qmark=""),
         dict(base),
     ]
     for kw in attempts:
@@ -294,28 +305,38 @@ def q_select(message: str, choices: List[Choice]):
 
 # ─── Inventory ────────────────────────────────────────────────────────────────
 
-def discover_hosts() -> Dict[str, Dict[str, str]]:
-    hosts: Dict[str, Dict[str, str]] = {}
-    current_group = None
+def discover_hosts() -> Dict[str, Dict[str, Any]]:
+    hosts: Dict[str, Dict[str, Any]] = {}
+    current_group: Optional[str] = None
     try:
         with open(INVENTORY, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith(("#", ";")):
                     continue
-                grp = re.match(r"^\[(\w[\w-]*)\]", line)
-                if grp:
-                    g = grp.group(1)
-                    current_group = g if ":" not in g else None
+                if line.startswith("[") and line.endswith("]"):
+                    section = line[1:-1].strip()
+                    current_group = None if ":" in section else section
                     continue
-                if current_group:
-                    parts = line.split()
-                    name = parts[0]
-                    ip = ""
-                    for p in parts[1:]:
-                        if p.startswith("ansible_host="):
-                            ip = p.split("=", 1)[1]
-                    hosts[name] = {"group": current_group, "ip": ip}
+                if not current_group:
+                    continue
+
+                parts = line.split()
+                if not parts or "=" in parts[0]:
+                    continue
+
+                name = parts[0]
+                ip = ""
+                for p in parts[1:]:
+                    if p.startswith("ansible_host="):
+                        ip = p.split("=", 1)[1]
+
+                entry = hosts.setdefault(name, {"group": current_group, "groups": [], "ip": ""})
+                groups = entry.setdefault("groups", [])
+                if current_group not in groups:
+                    groups.append(current_group)
+                if ip:
+                    entry["ip"] = ip
     except FileNotFoundError:
         pass
     return hosts
@@ -338,10 +359,10 @@ def _ssh_key_for_section(section_header: str, fallback: str) -> str:
     return os.path.expanduser(fallback)
 
 def _tresor_ssh_key() -> str:
-    return _ssh_key_for_section("[all:vars]", "~/.ssh/id_ed25519_homelab")
+    return _ssh_key_for_section("[all:vars]", "~/.ssh/id_ed25519_tresor")
 
 def _vps_ssh_key() -> str:
-    return _ssh_key_for_section("[vps:vars]", "~/.ssh/id_ed25519_homelab_vps")
+    return _ssh_key_for_section("[vps:vars]", "~/.ssh/id_ed25519_tresor_vps")
 
 # ─── Versions ─────────────────────────────────────────────────────────────────
 
@@ -358,6 +379,7 @@ def load_pinned_versions() -> Dict[str, str]:
             is_ver = str(key).endswith("_version")
             svc_raw = str(key).replace("_image", "").replace("_version", "")
             svc_raw = svc_raw.replace("minecraft_server", "paper")
+            svc_raw = svc_raw.replace("satelite_watcher_satdump", "satelite_watcher")
             svc = svc_raw.replace("_", "-")
 
             v = str(value)
@@ -397,6 +419,50 @@ def discover_infra_plays() -> List[Tuple[str, str]]:
 
 def discover_vps_plays() -> List[Tuple[str, str]]:
     return _discover_folder_plays("vps")
+
+
+def _timer_detail(timer_info: Dict[str, Any]) -> str:
+    active = str(timer_info.get("active") or "").strip().lower()
+    recordings = int(timer_info.get("recording_count") or 0)
+    if recordings > 0:
+        return "now"
+
+    since = str(timer_info.get("active_ago") or "").strip()
+    if active == "active" and since:
+        return since
+
+    next_in = str(timer_info.get("next_in") or "").strip()
+    last_ago = str(timer_info.get("last_ago") or "").strip()
+
+    if active == "active" and next_in:
+        return f"next {next_in}"
+    if last_ago:
+        return f"{last_ago} ago"
+    return "—"
+
+def _host_in_group(info: Dict[str, Any], group: str) -> bool:
+    groups = info.get("groups") or []
+    return group in groups or info.get("group") == group
+
+
+def _group_host_ip(hosts: Dict[str, Dict[str, Any]], group: str, fallback: str) -> str:
+    for info in hosts.values():
+        if _host_in_group(info, group) and info.get("ip"):
+            return str(info["ip"])
+    return fallback
+
+
+def load_menu_state() -> Dict[str, Any]:
+    hosts = discover_hosts()
+    return {
+        "hosts": hosts,
+        "services": discover_services(),
+        "pinned_versions": load_pinned_versions(),
+        "infra_plays": discover_infra_plays(),
+        "vps_plays": discover_vps_plays(),
+        "tresor_ip": _group_host_ip(hosts, "prod", "192.0.2.10"),
+        "vps_ip": _group_host_ip(hosts, "vps", "203.0.113.10"),
+    }
 
 def get_playbook_host(service: str, action: str) -> str:
     path = os.path.join(PLAYBOOKS_DIR, service, f"{action}.yml")
@@ -570,6 +636,7 @@ def _compress_duration(raw: str) -> str:
         (r",\s*", " "),
     ]:
         x = re.sub(pat, repl, x, flags=re.IGNORECASE)
+    x = x.strip(" ,")
     parts = x.split()
     return " ".join(parts[:2]) if parts else "—"
 
@@ -660,10 +727,25 @@ def bar(pct: Optional[float], width: int = 20) -> str:
 
     return f"[{color}]{fill}[/{color}][{C_DIM}]{'░' * empty_cells}[/{C_DIM}]"
 
+def _pct_label(pct: Optional[float]) -> str:
+    if pct is None:
+        return "—"
+    pct = max(0.0, min(100.0, float(pct)))
+    if pct == 0:
+        return "idle"
+    if pct < 1:
+        return "<1%"
+    return f"{pct:.1f}%"
+
+def _resource_line(label: str, pct: Optional[float], value: str, width: int) -> str:
+    if pct is None:
+        return f"[{C_DIM}]{label:<3}  {'░' * max(8, width)}     {value}[/{C_DIM}]"
+    return f"[{C_DIM}]{label:<3}[/{C_DIM}]  {bar(pct, width=width)}  [{C_WHITE}]{value}[/{C_WHITE}]"
+
 def render_header() -> str:
     return (
         f"[bold {C_ACCENT}]>[/] "
-        f"[bold {C_WHITE}]admin.circei[/]  "
+        f"[bold {C_WHITE}]radu.circei[/]  "
         f"[{C_DIM}]//[/{C_DIM}]  "
         f"[{C_MID}]Tresor control panel[/{C_MID}]"
     )
@@ -1010,6 +1092,61 @@ def fetch_tresor(host_ip: str) -> Dict[str, Any]:
 export LC_ALL=C
 set +e
 
+_tctl_age() {
+  ts="$1"
+  if [ -z "$ts" ] || [ "$ts" = "n/a" ]; then
+    echo ""
+    return
+  fi
+  epoch=$(date -d "$ts" +%s 2>/dev/null || true)
+  if [ -z "$epoch" ]; then
+    echo ""
+    return
+  fi
+  now=$(date +%s)
+  diff=$((now - epoch))
+  if [ "$diff" -lt 0 ]; then
+    diff=$((0 - diff))
+  fi
+  if [ "$diff" -lt 60 ]; then
+    echo "${diff}s"
+  elif [ "$diff" -lt 3600 ]; then
+    echo "$((diff / 60))m"
+  elif [ "$diff" -lt 86400 ]; then
+    echo "$((diff / 3600))h"
+  else
+    echo "$((diff / 86400))d"
+  fi
+}
+
+_tctl_until() {
+  ts="$1"
+  if [ -z "$ts" ] || [ "$ts" = "n/a" ]; then
+    echo ""
+    return
+  fi
+  epoch=$(date -d "$ts" +%s 2>/dev/null || true)
+  if [ -z "$epoch" ]; then
+    echo ""
+    return
+  fi
+  now=$(date +%s)
+  diff=$((epoch - now))
+  if [ "$diff" -le 0 ]; then
+    echo "due"
+    return
+  fi
+  if [ "$diff" -lt 60 ]; then
+    echo "${diff}s"
+  elif [ "$diff" -lt 3600 ]; then
+    echo "$((diff / 60))m"
+  elif [ "$diff" -lt 86400 ]; then
+    echo "$((diff / 3600))h"
+  else
+    echo "$((diff / 86400))d"
+  fi
+}
+
 echo "=HOSTNAME="
 hostname
 
@@ -1056,6 +1193,52 @@ else
   echo "err|$(tail -n 1 "$WG_ERR" 2>/dev/null)"
 fi
 rm -f "$WG_ERR"
+
+echo "=SYSTEMD="
+_tctl_systemctl() {
+  if systemctl "$@" 2>/dev/null; then
+    return 0
+  fi
+  sudo -n systemctl "$@" 2>/dev/null
+}
+
+_tctl_unit_summary() {
+  key="$1"
+  unit="$2"
+  kind="$3"
+  active_glob="$4"
+  if ! _tctl_systemctl cat "$unit" >/dev/null; then
+    echo "${key}|${kind}|missing|disabled||||"
+    return
+  fi
+
+  active=$(_tctl_systemctl is-active "$unit" || echo "inactive")
+  enabled=$(_tctl_systemctl is-enabled "$unit" || echo "disabled")
+  next_in=""
+  last_ago=""
+  active_ago=""
+  active_count="0"
+
+  if [ "$kind" = "timer" ]; then
+    next_raw=$(_tctl_systemctl show "$unit" -p NextElapseUSecRealtime --value)
+    last_raw=$(_tctl_systemctl show "$unit" -p LastTriggerUSec --value)
+    next_in=$(_tctl_until "$next_raw")
+    last_ago=$(_tctl_age "$last_raw")
+  else
+    active_raw=$(_tctl_systemctl show "$unit" -p ActiveEnterTimestamp --value)
+    active_ago=$(_tctl_age "$active_raw")
+  fi
+
+  if [ -n "$active_glob" ]; then
+    active_count=$(_tctl_systemctl list-units "$active_glob" --type=service --state=active --no-legend --no-pager | wc -l | tr -d ' ')
+  fi
+
+  echo "${key}|${kind}|${active}|${enabled}|${next_in}|${last_ago}|${active_count}|${active_ago}"
+}
+_tctl_unit_summary "satelite-watcher" "satelite-watcher-schedule.timer" "timer" "satelite-watcher-record@*.service"
+_tctl_unit_summary "paper-join-notifier" "paper-join-notifier.service" "service" ""
+_tctl_unit_summary "ra-artist-notifier" "ra-artist-notifier.timer" "timer" ""
+_tctl_unit_summary "yt-downloader" "batchyt-liked.timer" "timer" ""
 
 echo "=DOCKER_PS="
 FMT='{{.Names}}|{{.Image}}|{{.Status}}'
@@ -1106,6 +1289,7 @@ echo "=END="
         "hostname": "tresor",
         "wg_status": "?",
         "wg_handshake": "—",
+        "systemd": {},
         "docker_no_perms": False,
         "docker_error": "",
         "connected": bool(raw),
@@ -1161,6 +1345,26 @@ echo "=END="
             parts = s.split("|", 1)
             result["wg_status"] = parts[0].strip()
             result["wg_handshake"] = parts[1].strip() if len(parts) > 1 else "—"
+        elif section == "systemd":
+            parts = s.split("|", 7)
+            if len(parts) < 2 or parts[1] == "__missing__":
+                continue
+            while len(parts) < 8:
+                parts.append("")
+            svc, kind, active, enabled, next_in, last_ago, active_count, active_ago = parts
+            try:
+                count = int(active_count.strip() or "0")
+            except ValueError:
+                count = 0
+            result["systemd"][svc.strip()] = {
+                "kind": kind.strip(),
+                "active": active.strip(),
+                "enabled": enabled.strip(),
+                "next_in": next_in.strip(),
+                "last_ago": last_ago.strip(),
+                "recording_count": count,
+                "active_ago": active_ago.strip(),
+            }
         elif section == "docker_ps":
             if s.startswith("__ok__"):
                 continue
@@ -1393,19 +1597,22 @@ def resolve_version(svc: str, containers: Dict[str, Any], name_map: Dict[str, st
     cname = resolve_container_name(svc, name_map)
     if cname and cname in containers:
         tag = image_tag(containers[cname]["image"])
+        if tag == "latest" and SVC_META.get(svc, {}).get("show_latest_tag"):
+            return tag
         if tag and tag not in ("—", "latest"):
             return tag
     if pinned.get(svc):
         return pinned[svc]
     if svc in OWN_SERVICES:
         return "v0"
-    return "—"
+    return ""
 
 def service_state(
     svc: str,
     actions: List[str],
     containers: Dict[str, Any],
     name_map: Dict[str, str],
+    systemd: Dict[str, Any],
 ) -> Tuple[str, str, str, str]:
     cname = resolve_container_name(svc, name_map)
     if cname and cname in containers:
@@ -1420,17 +1627,48 @@ def service_state(
             return "↺", "restart", STATE_COLOR["restart"], upt
         if s.startswith("created"):
             return "◌", "created", STATE_COLOR["created"], upt
-        return "?", s[:8], C_DIM, "—"
+        return "?", s[:8], C_DIM, ""
 
-    if svc in CRON_SERVICES:
-        return "◷", "cron", STATE_COLOR["cron"], "—"
+    timer_info = systemd.get(svc)
+    if timer_info:
+        kind = str(timer_info.get("kind") or "timer").strip().lower()
+        recordings = int(timer_info.get("recording_count") or 0)
+        active = str(timer_info.get("active") or "").strip().lower()
+        enabled = str(timer_info.get("enabled") or "").strip().lower()
+        detail = _timer_detail(timer_info)
+        if kind == "service":
+            if active == "active":
+                return "●", "running", STATE_COLOR["running"], detail
+            if active == "failed":
+                return "✕", "failed", STATE_COLOR["failed"], detail
+            if active == "missing":
+                return "○", "missing", STATE_COLOR["stopped"], detail
+            if enabled == "enabled":
+                return "○", "idle", STATE_COLOR["idle"], detail
+            return "○", "stopped", STATE_COLOR["stopped"], detail
+        if recordings > 0:
+            return "●", "record", STATE_COLOR["running"], detail
+        if active == "failed":
+            return "✕", "failed", STATE_COLOR["failed"], detail
+        if active == "missing":
+            return "○", "missing", STATE_COLOR["stopped"], detail
+        if active == "active":
+            return "◷", "timer", STATE_COLOR["timer"], detail
+        if enabled == "enabled":
+            return "○", "idle", STATE_COLOR["idle"], detail
+        return "○", "timer", STATE_COLOR["systemd"], detail
 
-    return "○", "stopped", STATE_COLOR["stopped"], "—"
+    if SVC_META.get(svc, {}).get("kind") == "systemd":
+        return "○", "missing", STATE_COLOR["stopped"], ""
+
+    if svc in TIMER_SERVICES:
+        return "◷", "sched", STATE_COLOR["cron"], ""
+
+    return "○", "stopped", STATE_COLOR["stopped"], ""
 
 def render_tresor_panel(data: Dict[str, Any], width: int) -> Panel:
     hostname = data.get("hostname", "tresor")
     connected = data.get("connected", False)
-    density = _ui_density()
     panel_bar_w = _panel_bar_width(width)
     compact_panel = width < 72
 
@@ -1479,18 +1717,14 @@ def render_tresor_panel(data: Dict[str, Any], width: int) -> Panel:
     line2 = f"{ctr_label}   [{wg_c}]●[/{wg_c}] [{C_DIM}]wg0{wg_detail}[/{C_DIM}]"
 
     cpu_val = data.get("cpu")
-    cpu_line = (
-        f"[{C_DIM}]cpu[/{C_DIM}]  {bar(cpu_val, width=panel_bar_w)}  [{C_WHITE}]{cpu_val:5.1f}%[/{C_WHITE}]"
-        if cpu_val is not None
-        else f"[{C_DIM}]cpu  {'░' * max(8, panel_bar_w)}     —[/{C_DIM}]"
-    )
+    cpu_line = _resource_line("cpu", cpu_val, _pct_label(cpu_val), panel_bar_w)
 
     mem_raw = data.get("mem")
     if mem_raw:
         try:
             u_mb, t_mb = (float(x) for x in str(mem_raw).split("/"))
             pct = u_mb / t_mb * 100 if t_mb > 0 else 0
-            mem_line = f"[{C_DIM}]mem[/{C_DIM}]  {bar(pct, width=panel_bar_w)}  [{C_WHITE}]{u_mb/1024:.1f}G/{t_mb/1024:.1f}G[/{C_WHITE}]"
+            mem_line = _resource_line("mem", pct, f"{u_mb/1024:.1f}G/{t_mb/1024:.1f}G", panel_bar_w)
         except Exception:
             mem_line = f"[{C_DIM}]mem  {'░' * max(8, panel_bar_w)}     {mem_raw}[/{C_DIM}]"
     else:
@@ -1499,20 +1733,18 @@ def render_tresor_panel(data: Dict[str, Any], width: int) -> Panel:
     disks = build_disk_views(data.get("lsblk") or [], data.get("df") or [])
     disk_block = format_disk_views(disks, max_items=3, max_width=max(24, width - 8))
 
-    spacer = "\n" if density != "tight" else ""
-    inner = f"{line1}\n{line2}{spacer}\n\n{cpu_line}\n{mem_line}{spacer}\n\n{disk_block}"
+    inner = f"{line1}\n{line2}\n\n{cpu_line}\n{mem_line}\n\n{disk_block}"
     return Panel(inner, border_style=C_BORDER, padding=(1, 2), width=width)
 
 def render_vps_panel(data: Dict[str, Any], width: int) -> Panel:
     connected = data.get("connected", False)
     hostname = data.get("hostname", "tresor-vps")
-    density = _ui_density()
     panel_bar_w = _panel_bar_width(width)
     compact_panel = width < 72
 
     if not connected:
         inner = (
-            f"[bold {C_WHITE}]{hostname}[/]  1.2.3.4   [bold {C_RED}]✗ unreachable[/]\n"
+            f"[bold {C_WHITE}]{hostname}[/]  203.0.113.10   [bold {C_RED}]✗ unreachable[/]\n"
             f"[{C_DIM}]{data.get('ssh_target', '?')}[/{C_DIM}]\n"
             f"[{C_RED}]{data.get('ssh_error') or 'unreachable'}[/{C_RED}]"
         )
@@ -1520,7 +1752,7 @@ def render_vps_panel(data: Dict[str, Any], width: int) -> Panel:
 
     up_raw = data.get("uptime") or "?"
     up_str = _compress_duration(up_raw) if compact_panel else up_raw
-    line1 = f"[bold {C_WHITE}]{hostname}[/]  [{C_DIM}]1.2.3.4  up {up_str}[/{C_DIM}]"
+    line1 = f"[bold {C_WHITE}]{hostname}[/]  [{C_DIM}]203.0.113.10  up {up_str}[/{C_DIM}]"
 
     nginx = data.get("nginx", "?")
     velocity = data.get("velocity", "?")
@@ -1536,18 +1768,14 @@ def render_vps_panel(data: Dict[str, Any], width: int) -> Panel:
     )
 
     cpu_val = data.get("cpu")
-    cpu_line = (
-        f"[{C_DIM}]cpu[/{C_DIM}]  {bar(cpu_val, width=panel_bar_w)}  [{C_WHITE}]{cpu_val:5.1f}%[/{C_WHITE}]"
-        if cpu_val is not None
-        else f"[{C_DIM}]cpu  {'░' * max(8, panel_bar_w)}     —[/{C_DIM}]"
-    )
+    cpu_line = _resource_line("cpu", cpu_val, _pct_label(cpu_val), panel_bar_w)
 
     mem_raw = data.get("mem")
     if mem_raw:
         try:
             u_mb, t_mb = (float(x) for x in str(mem_raw).split("/"))
             pct = u_mb / t_mb * 100 if t_mb > 0 else 0
-            mem_line = f"[{C_DIM}]mem[/{C_DIM}]  {bar(pct, width=panel_bar_w)}  [{C_WHITE}]{u_mb/1024:.1f}G/{t_mb/1024:.1f}G[/{C_WHITE}]"
+            mem_line = _resource_line("mem", pct, f"{u_mb/1024:.1f}G/{t_mb/1024:.1f}G", panel_bar_w)
         except Exception:
             mem_line = f"[{C_DIM}]mem  {'░' * max(8, panel_bar_w)}     {mem_raw}[/{C_DIM}]"
     else:
@@ -1559,8 +1787,7 @@ def render_vps_panel(data: Dict[str, Any], width: int) -> Panel:
     else:
         disk_line = f"[{C_DIM}]disk[/{C_DIM}] —"
 
-    spacer = "\n" if density != "tight" else ""
-    inner = f"{line1}\n{line2}{spacer}\n\n{cpu_line}\n{mem_line}{spacer}\n\n{disk_line}"
+    inner = f"{line1}\n{line2}\n\n{cpu_line}\n{mem_line}\n\n{disk_line}"
     return Panel(inner, border_style=C_BORDER, padding=(1, 2), width=width)
 
 def service_row(
@@ -1569,16 +1796,17 @@ def service_row(
     containers: Dict[str, Any],
     metrics: Dict[str, Any],
     name_map: Dict[str, str],
+    systemd: Dict[str, Any],
     pinned: Dict[str, str],
     layout: TableLayout,
 ):
-    sym, label, state_color, upt = service_state(svc, actions, containers, name_map)
+    sym, label, state_color, upt = service_state(svc, actions, containers, name_map, systemd)
     ver = resolve_version(svc, containers, name_map, pinned)
     net = str(SVC_META.get(svc, {}).get("net", ""))
     badge = NET_BADGE.get(net, " ")
     badge_color = NET_COLOR.get(net, C_DIM)
 
-    cpu_s, mem_s = "—", "—"
+    cpu_s, mem_s = "", ""
     cpu_color, mem_color = C_DIM, C_DIM
 
     cname = resolve_container_name(svc, name_map)
@@ -1611,7 +1839,7 @@ def service_row(
 
     chunks += [
         ("", " "),
-        (f"fg:{state_color}", f"{sym} {_fit(label, layout.w_st - 2)}"),
+            (f"fg:{state_color}", f"{sym} {_fit(label, layout.w_st - 2)}"),
     ]
 
     if layout.show_uptime:
@@ -1650,27 +1878,33 @@ def col_header(layout: TableLayout) -> str:
 
 # ─── Host picker ──────────────────────────────────────────────────────────────
 
-def build_host_choices(hosts: Dict[str, Dict[str, str]]) -> List[Choice]:
+def build_host_choices(hosts: Dict[str, Dict[str, Any]]) -> List[Choice]:
     out: List[Choice] = []
     for name, info in hosts.items():
-        out.append(Choice(title=f"  {name:<14} {info['group']:<5} {info['ip'] or '?'}", value=name))
+        groups = [str(g) for g in info.get("groups") or [] if g]
+        group_label = ",".join(groups) if groups else str(info.get("group") or "?")
+        out.append(Choice(title=f"  {name:<14} {group_label:<12} {info.get('ip') or '?'}", value=name))
+    out.append(Choice(title="  ⟳  refresh", value="__refresh__"))
     out.append(Choice(title="  cancel", value="__cancel__"))
     return out
 
-def resolve_host(service: str, action: str, host_choices: List[Choice]):
-    declared = get_playbook_host(service, action)
-    if declared and declared not in ("all", ""):
-        return declared, False
+def resolve_host(service: str, action: str):
+    while True:
+        declared = get_playbook_host(service, action)
+        if declared and declared not in ("all", ""):
+            return declared, False
 
-    host = q_select("", host_choices)
-    if host is None or host == "__cancel__":
-        return None, False
-    return host, True
+        host = q_select("", build_host_choices(discover_hosts()))
+        if host is None or host == "__cancel__":
+            return None, False
+        if host == "__refresh__":
+            continue
+        return host, True
 
 # ─── Runner ───────────────────────────────────────────────────────────────────
 
-def run_playbook(service: str, action: str, host_choices: List[Choice]):
-    host, needs_limit = resolve_host(service, action, host_choices)
+def run_playbook(service: str, action: str):
+    host, needs_limit = resolve_host(service, action)
     if host is None:
         return
 
@@ -1704,45 +1938,55 @@ def run_playbook(service: str, action: str, host_choices: List[Choice]):
 
 # ─── Sub-menus ────────────────────────────────────────────────────────────────
 
-def service_menu(service: str, actions: List[str], host_choices: List[Choice]):
-    order = ["deploy", "start", "stop", "restart", "status", "verify", "backup", "update", "remove"]
-    sorted_actions = sorted(actions, key=lambda a: order.index(a) if a in order else 99)
-
-    choices = [Choice(title=f"  {PLAY_LABEL.get(a, f'•  {a}')}", value=a) for a in sorted_actions]
-    choices.append(Choice(title="  ← back", value="__back__"))
-    choices.append(Choice(title="  ✕ quit", value="__quit__"))
-
+def service_menu(service: str):
     meta = SVC_META.get(service, {})
-    header = f"{service}"
-    if meta.get("desc"):
-        header += f" — {meta['desc']}"
-    if meta.get("url"):
-        header += f"\n{meta['url']}"
-
+    order = ["deploy", "start", "stop", "restart", "status", "verify", "backup", "update", "remove"]
     while True:
+        actions = discover_services().get(service, [])
+        sorted_actions = sorted(actions, key=lambda a: order.index(a) if a in order else 99)
+
+        choices = [Choice(title=f"  {PLAY_LABEL.get(a, f'•  {a}')}", value=a) for a in sorted_actions]
+        choices.append(Choice(title="  ⟳  refresh", value="__refresh__"))
+        choices.append(Choice(title="  ← back", value="__back__"))
+        choices.append(Choice(title="  ✕ quit", value="__quit__"))
+
+        header = f"{service}"
+        if meta.get("desc"):
+            header += f" — {meta['desc']}"
+        if meta.get("url"):
+            header += f"\n{meta['url']}"
+        if not actions:
+            header += "\n(no playbooks found)"
+
         action = q_select(header, choices)
         if action is None or action == "__back__":
             return
+        if action == "__refresh__":
+            continue
         if action == "__quit__":
             _bye()
-        run_playbook(service, action, host_choices)
+        run_playbook(service, action)
 
-def _plays_menu(title: str, plays: List[Tuple[str, str]], host_choices: List[Choice]):
-    choices = [Choice(title=f"  {name.replace('-', ' ').replace('_', ' ')}", value=(folder, name)) for folder, name in plays]
-    choices.append(Choice(title="  ← back", value="__back__"))
-
+def _plays_menu(title: str, folder: str):
     while True:
+        plays = _discover_folder_plays(folder)
+        choices = [Choice(title=f"  {name.replace('-', ' ').replace('_', ' ')}", value=(folder, name)) for folder, name in plays]
+        choices.append(Choice(title="  ⟳  refresh", value="__refresh__"))
+        choices.append(Choice(title="  ← back", value="__back__"))
+
         sel = q_select(title, choices)
         if sel is None or sel == "__back__":
             return
+        if sel == "__refresh__":
+            continue
         folder, action = sel
-        run_playbook(folder, action, host_choices)
+        run_playbook(folder, action)
 
-def infra_menu(plays: List[Tuple[str, str]], host_choices: List[Choice]):
-    _plays_menu("infrastructure", plays, host_choices)
+def infra_menu():
+    _plays_menu("infrastructure", "infra")
 
-def vps_menu(plays: List[Tuple[str, str]], host_choices: List[Choice]):
-    _plays_menu("vps", plays, host_choices)
+def vps_menu():
+    _plays_menu("vps", "vps")
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -1751,23 +1995,19 @@ def main():
         console.print(f"  [bold {C_RED}]✗  run from the ansible/ directory[/]")
         sys.exit(1)
 
-    hosts = discover_hosts()
-    host_choices = build_host_choices(hosts)
-    services = discover_services()
-    pinned_versions = load_pinned_versions()
-    infra_plays = discover_infra_plays()
-    vps_plays = discover_vps_plays()
-
-    if not services:
-        console.print(f"  [bold {C_RED}]✗  no playbooks in {PLAYBOOKS_DIR}/[/]")
-        sys.exit(1)
-
-    prod_hosts = [h for h, i in hosts.items() if i["group"] == "prod"]
-    vps_hosts = [h for h, i in hosts.items() if i["group"] == "vps"]
-    tresor_ip = hosts[prod_hosts[0]]["ip"] if prod_hosts else "192.168.1.100"
-    vps_ip = hosts[vps_hosts[0]]["ip"] if vps_hosts else "1.2.3.4"
-
     while True:
+        menu_state = load_menu_state()
+        services = menu_state["services"]
+        pinned_versions = menu_state["pinned_versions"]
+        infra_plays = menu_state["infra_plays"]
+        vps_plays = menu_state["vps_plays"]
+        tresor_ip = menu_state["tresor_ip"]
+        vps_ip = menu_state["vps_ip"]
+
+        if not services:
+            console.print(f"  [bold {C_RED}]✗  no playbooks in {PLAYBOOKS_DIR}/[/]")
+            sys.exit(1)
+
         console.clear()
         console.print(render_header())
 
@@ -1809,22 +2049,23 @@ def main():
         containers = tresor_data.get("containers") or {}
         metrics = tresor_data.get("metrics") or {}
         name_map = tresor_data.get("name_map") or {}
+        systemd = tresor_data.get("systemd") or {}
 
         svc_choices: List[Choice] = []
         for svc, actions in sorted(services.items(), key=_service_sort_key):
             svc_choices.append(
                 Choice(
-                    title=service_row(svc, actions, containers, metrics, name_map, pinned_versions, layout),
+                    title=service_row(svc, actions, containers, metrics, name_map, systemd, pinned_versions, layout),
                     value=svc,
                 )
             )
 
         if infra_plays:
-            svc_choices.append(Choice(title="  🔧 infrastructure", value="__infra__"))
+            svc_choices.append(Choice(title="  🛠 infrastructure", value="__infra__"))
         if vps_plays:
-            svc_choices.append(Choice(title="  🌐 vps", value="__vps__"))
-        svc_choices.append(Choice(title="  ⟳  refresh", value="__refresh__"))
-        svc_choices.append(Choice(title="  ✕  quit", value="__quit__"))
+            svc_choices.append(Choice(title="  🖥 vps host", value="__vps__"))
+        svc_choices.append(Choice(title="  [R] refresh", value="__refresh__"))
+        svc_choices.append(Choice(title="  [Q] quit", value="__quit__"))
 
         sel = q_select("", svc_choices)
 
@@ -1833,13 +2074,13 @@ def main():
         if sel == "__refresh__":
             continue
         if sel == "__infra__":
-            infra_menu(infra_plays, host_choices)
+            infra_menu()
             continue
         if sel == "__vps__":
-            vps_menu(vps_plays, host_choices)
+            vps_menu()
             continue
 
-        service_menu(sel, services[sel], host_choices)
+        service_menu(sel)
 
 if __name__ == "__main__":
     main()

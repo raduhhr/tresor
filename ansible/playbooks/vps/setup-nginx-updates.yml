@@ -1,0 +1,24 @@
+---
+# Adds the updates.raduhhr.xyz static update bucket to nginx on tresor-vps.
+#
+# DNS should be direct/DNS-only:
+#   updates.raduhhr.xyz A 203.0.113.10
+#
+# Public updater files live under:
+#   /var/www/updates.raduhhr.xyz/batchyt/update.json
+#   /var/www/updates.raduhhr.xyz/batchyt/BatchYTDownloaderSetup.exe
+#
+# URLs consumed by BatchYTDownloader:
+#   https://updates.raduhhr.xyz/batchyt/update.json
+#   https://updates.raduhhr.xyz/batchyt/BatchYTDownloaderSetup.exe
+
+- name: "VPS | updates.raduhhr.xyz static app update bucket"
+  hosts: vps
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Add updates.raduhhr.xyz static vhost to nginx
+      ansible.builtin.include_role:
+        name: nginx-music
+        tasks_from: updates

@@ -5,6 +5,7 @@
 filebrowser_public_root_dir:    "/mnt/data/cloud"
 filebrowser_public_config_dir:  "/mnt/ssd/configs/filebrowser-public"
 filebrowser_public_db_dir:      "/mnt/ssd/configs/filebrowser-public/db"
+filebrowser_public_root_bind_mode: "rw,rslave"
 
 filebrowser_public_network:     "public_net"
 filebrowser_public_bind_addr:   "10.66.66.2"
@@ -17,6 +18,18 @@ filebrowser_public_admin_user: "admin"
 filebrowser_public_admin_pass: "changeme"
 
 # Override in group_vars/prod/main.yml via tresor_versions.filebrowser_image
-filebrowser_public_image: "filebrowser/filebrowser:v2.59.0"  # fallback; prod overrides via tresor_versions
+filebrowser_public_image: "filebrowser/filebrowser:v2.63.3"  # fallback; prod overrides via tresor_versions
 
 filebrowser_public_create_root_dir: true
+
+# Optional shared + private homes model for the public instance.
+# When filebrowser_public_private_users is non-empty, the role ensures:
+#   /srv/shared
+#   /srv/users/<username>
+#   /srv/users/<username>/shared  (bind mount of /srv/shared)
+# You still need to create/update the File Browser users themselves.
+filebrowser_public_shared_dir_name: "shared"
+filebrowser_public_users_dir_name: "users"
+filebrowser_public_private_shared_mount_name: "shared"
+filebrowser_public_private_users: []
+filebrowser_public_manage_user_scopes: false

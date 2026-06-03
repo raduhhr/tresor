@@ -1,0 +1,11 @@
+---
+- name: Stop Paper Discord join notifier
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop service
+      ansible.builtin.systemd:
+        name: paper-join-notifier
+        state: stopped

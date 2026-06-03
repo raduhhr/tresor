@@ -1,0 +1,75 @@
+---
+- name: "content-notifier status (cron health check)"
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    cron_file: /etc/cron.d/content-notifier
+    wrapper_path: /opt/content-notifier/content-notifier.sh
+    script_path: /opt/content-notifier/content_notifier.py
+    env_file: /mnt/ssd/configs/content-notifier/content-notifier.env
+    state_file: /mnt/ssd/configs/content-notifier/state.json
+    log_path: /var/log/content-notifier.log
+
+  tasks:
+    - name: Check cron file exists
+      ansible.builtin.stat:
+        path: "{{ cron_file }}"
+      register: _cron
+
+    - name: Assert cron job is installed
+      ansible.builtin.assert:
+        that: _cron.stat.exists
+        fail_msg: "Cron file {{ cron_file }} missing - run deploy/start."
+
+    - name: Check wrapper script exists
+      ansible.builtin.stat:
+        path: "{{ wrapper_path }}"
+      register: _wrapper
+
+    - name: Assert wrapper is installed
+      ansible.builtin.assert:
+        that: _wrapper.stat.exists
+        fail_msg: "Wrapper {{ wrapper_path }} missing - run deploy/start."
+
+    - name: Check notifier script exists
+      ansible.builtin.stat:
+        path: "{{ script_path }}"
+      register: _script
+
+    - name: Assert script is installed
+      ansible.builtin.assert:
+        that: _script.stat.exists
+        fail_msg: "Script {{ script_path }} missing - run deploy/start."
+
+    - name: Check env file exists
+      ansible.builtin.stat:
+        path: "{{ env_file }}"
+      register: _env
+
+    - name: Assert env file is installed
+      ansible.builtin.assert:
+        that: _env.stat.exists
+        fail_msg: "Env file {{ env_file }} missing - run deploy/start."
+
+    - name: Check state file exists
+      ansible.builtin.stat:
+        path: "{{ state_file }}"
+      register: _state
+
+    - name: Read last log entry
+      ansible.builtin.shell: |
+        tail -1 "{{ log_path }}" 2>/dev/null || echo "No log file yet"
+      register: _last_log
+      changed_when: false
+
+    - name: Show status summary
+      ansible.builtin.debug:
+        msg:
+          cron: "{{ _cron.stat.exists | ternary('installed', 'MISSING') }}"
+          wrapper: "{{ _wrapper.stat.exists | ternary('installed', 'MISSING') }}"
+          script: "{{ _script.stat.exists | ternary('installed', 'MISSING') }}"
+          env: "{{ _env.stat.exists | ternary('present', 'MISSING') }}"
+          state: "{{ _state.stat.exists | ternary('present', 'MISSING') }}"
+          last_run: "{{ _last_log.stdout }}"

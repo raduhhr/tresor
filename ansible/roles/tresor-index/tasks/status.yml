@@ -1,0 +1,80 @@
+---
+- name: Gather Tresor Index container info
+  community.docker.docker_container_info:
+    name: "{{ item }}"
+  loop:
+    - "{{ tresor_index_db_container_name }}"
+    - "{{ tresor_index_scheduler_container_name }}"
+    - "{{ tresor_index_api_container_name }}"
+  register: _tresor_index_containers
+  changed_when: false
+  no_log: true
+
+- name: Build Tresor Index container status map
+  ansible.builtin.set_fact:
+    _tresor_index_status: "{{ _tresor_index_status | default({}) | combine({item.item: {'exists': item.exists, 'running': item.container.State.Running | default(false), 'status': item.container.State.Status | default('missing'), 'image': item.container.Config.Image | default('')}}) }}"
+  loop: "{{ _tresor_index_containers.results }}"
+  no_log: true
+
+- name: Run Tresor Index app status command
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - "{{ tresor_index_network }}"
+      - --env-file
+      - "{{ tresor_index_env_file }}"
+      - -v
+      - "{{ tresor_index_config_dir }}:/config:ro"
+      - "{{ tresor_index_app_image }}"
+      - python
+      - -m
+      - tresor_index.cli
+      - status
+  register: _tresor_index_app_status
+  changed_when: false
+  failed_when: false
+  when:
+    - _tresor_index_status[tresor_index_db_container_name].running | bool
+
+- name: Show Tresor Index diagnostics
+  ansible.builtin.debug:
+    msg:
+      containers: "{{ _tresor_index_status }}"
+      app_status_rc: "{{ _tresor_index_app_status.rc | default('not-run') }}"
+      app_status: "{{ _tresor_index_app_status.stdout | default('database container is not running') }}"
+
+- name: Check Tresor Index public API health
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ tresor_index_api_container_name }}"
+      - python
+      - -c
+      - |
+        import json, urllib.request
+        print(urllib.request.urlopen('http://127.0.0.1:{{ tresor_index_api_container_port }}/health', timeout=5).read().decode())
+  register: _tresor_index_api_health
+  changed_when: false
+  failed_when: false
+  when:
+    - tresor_index_api_enabled | bool
+    - _tresor_index_status[tresor_index_api_container_name].running | bool
+
+- name: Show Tresor Index public API health
+  ansible.builtin.debug:
+    msg: "{{ _tresor_index_api_health.stdout | default('api disabled or not running') }}"
+  when: tresor_index_api_enabled | bool
+
+- name: Assert Tresor Index containers are running
+  ansible.builtin.assert:
+    that:
+      - _tresor_index_status[tresor_index_db_container_name].running | bool
+      - _tresor_index_status[tresor_index_scheduler_container_name].running | bool
+      - (not tresor_index_api_enabled | bool) or (_tresor_index_status[tresor_index_api_container_name].running | bool)
+      - (_tresor_index_app_status.rc | default(1)) == 0
+      - (not tresor_index_api_enabled | bool) or ((_tresor_index_api_health.rc | default(1)) == 0)
+    fail_msg: "Tresor Index is not healthy. See diagnostics above."

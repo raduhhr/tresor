@@ -1,0 +1,18 @@
+---
+# Runs all service restore playbooks in sequence.
+
+- import_playbook: ../bday-notifier/restore.yml
+- import_playbook: ../cloudflared/restore.yml
+- import_playbook: ../content-notifier/restore.yml
+- import_playbook: ../filebrowser/restore.yml
+- import_playbook: ../filebrowser-public/restore.yml
+- import_playbook: ../grafana/restore.yml
+- import_playbook: ../jellyfin/restore.yml
+- import_playbook: ../jellyfin-music/restore.yml
+- import_playbook: ../kiwix/restore.yml
+- import_playbook: ../satelite-watcher/restore.yml
+- import_playbook: ../paper/restore.yml
+- import_playbook: ../prometheus/restore.yml
+- import_playbook: ../steam-free-notifier/restore.yml
+- import_playbook: ../traefik/restore.yml
+- import_playbook: ../uptime-kuma/restore.yml

@@ -1,0 +1,91 @@
+---
+- name: "[batchyt deploy] Ensure deploy group exists"
+  ansible.builtin.group:
+    name: "{{ batchyt_deploy_group }}"
+    system: true
+    state: present
+
+- name: "[batchyt deploy] Ensure deploy user exists"
+  ansible.builtin.user:
+    name: "{{ batchyt_deploy_user }}"
+    group: "{{ batchyt_deploy_group }}"
+    home: "{{ batchyt_deploy_home }}"
+    shell: /bin/bash
+    create_home: true
+    system: true
+    password: "!"
+    state: present
+
+- name: "[batchyt deploy] Ensure deploy home permissions"
+  ansible.builtin.file:
+    path: "{{ batchyt_deploy_home }}"
+    state: directory
+    owner: "{{ batchyt_deploy_user }}"
+    group: "{{ batchyt_deploy_group }}"
+    mode: "0750"
+
+- name: "[batchyt deploy] Ensure Ansible remote tmp exists for deploy user checks"
+  ansible.builtin.file:
+    path: "{{ batchyt_deploy_home }}/.ansible/tmp"
+    state: directory
+    owner: "{{ batchyt_deploy_user }}"
+    group: "{{ batchyt_deploy_group }}"
+    mode: "0700"
+
+- name: "[batchyt deploy] Ensure staging root exists"
+  ansible.builtin.file:
+    path: "{{ batchyt_deploy_staging_root }}"
+    state: directory
+    owner: "{{ batchyt_deploy_user }}"
+    group: "{{ batchyt_deploy_group }}"
+    mode: "0750"
+
+- name: "[batchyt deploy] Ensure public update bucket exists"
+  ansible.builtin.file:
+    path: "{{ batchyt_deploy_public_dir }}"
+    state: directory
+    owner: root
+    group: www-data
+    mode: "0755"
+
+- name: "[batchyt deploy] Install promote script"
+  ansible.builtin.template:
+    src: batchyt-promote-update.sh.j2
+    dest: "{{ batchyt_deploy_promote_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "[batchyt deploy] Install restricted sudoers rule"
+  ansible.builtin.template:
+    src: sudoers-batchyt-deploy.j2
+    dest: "{{ batchyt_deploy_sudoers_path }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: "[batchyt deploy] Install authorized deploy keys"
+  ansible.posix.authorized_key:
+    user: "{{ batchyt_deploy_user }}"
+    key: "{{ item }}"
+    state: present
+    exclusive: false
+  loop: "{{ batchyt_deploy_authorized_keys }}"
+  no_log: true
+  when: batchyt_deploy_authorized_keys | length > 0
+
+- name: "[batchyt deploy] Check sudo rule for deploy user"
+  ansible.builtin.command:
+    cmd: "sudo -l -U {{ batchyt_deploy_user }}"
+  changed_when: false
+  register: _batchyt_deploy_sudo_list
+
+- name: "[batchyt deploy] Show deploy readiness"
+  ansible.builtin.debug:
+    msg:
+      - "User: {{ batchyt_deploy_user }}"
+      - "Staging: {{ batchyt_deploy_staging_root }}"
+      - "Public bucket: {{ batchyt_deploy_public_dir }}"
+      - "Promote command: sudo {{ batchyt_deploy_promote_path }} <staging-dir>"
+      - "Authorized keys installed: {{ batchyt_deploy_authorized_keys | length }}"

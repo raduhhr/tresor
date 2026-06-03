@@ -1,6 +1,6 @@
 ---
 # Public hostname (A record -> VPS)
-nginx_music_domain: "music.example.com"
+nginx_music_domain: "media.raduhhr.xyz"
 
 # Backend (Tresor) over WireGuard
 nginx_music_upstream_host: "10.66.66.2"
@@ -70,11 +70,11 @@ nginx_music_denied_log_path: "/var/log/nginx/jellyfin_denied.log"
 nginx_music_enable_static_cache: true
 nginx_music_cache_duration: "7d"
 # ============================================================
-# filebrowser-public vhost vars (cloud.example.com)
+# filebrowser-public vhost vars (cloud.raduhhr.xyz)
 # Added by install-filebrowser-public.sh — do not duplicate.
-# Same nginx instance as music.example.com; separate server block + cert.
+# Same nginx instance as media.raduhhr.xyz; separate server block + cert.
 # ============================================================
-nginx_cloud_domain:        "cloud.example.com"
+nginx_cloud_domain:        "cloud.raduhhr.xyz"
 nginx_cloud_upstream_host: "10.66.66.2"
 nginx_cloud_upstream_port: 8082
 
@@ -91,3 +91,57 @@ nginx_cloud_conn_limit:        30
 
 nginx_cloud_access_log: "/var/log/nginx/cloud_access.log"
 nginx_cloud_error_log:  "/var/log/nginx/cloud_error.log"
+
+# ============================================================
+# Static site vhost vars (raduhhr.xyz)
+# Same VPS nginx instance; serves Astro build output directly.
+# ============================================================
+nginx_site_domain: "raduhhr.xyz"
+nginx_site_aliases:
+  - "www.raduhhr.xyz"
+nginx_site_root: "/var/www/raduhhr.xyz"
+nginx_site_config_name: "raduhhr.xyz.conf"
+nginx_site_enable_tls: true
+nginx_site_obtain_cert: true
+nginx_site_hsts: true
+nginx_site_access_log: "/var/log/nginx/raduhhr_access.log"
+nginx_site_error_log: "/var/log/nginx/raduhhr_error.log"
+
+# ============================================================
+# Static app update bucket vars (updates.raduhhr.xyz)
+# Same VPS nginx instance; serves public updater artifacts only.
+# ============================================================
+nginx_updates_domain: "updates.raduhhr.xyz"
+nginx_updates_root: "/var/www/updates.raduhhr.xyz"
+nginx_updates_path: "batchyt"
+nginx_updates_owner: "ansible"
+nginx_updates_group: "www-data"
+nginx_updates_config_name: "updates.raduhhr.xyz.conf"
+nginx_updates_enable_tls: true
+nginx_updates_obtain_cert: true
+nginx_updates_hsts: true
+nginx_updates_access_log: "/var/log/nginx/updates_access.log"
+nginx_updates_error_log: "/var/log/nginx/updates_error.log"
+
+# ============================================================
+# vot-parlament.ro / Tresor Index frontend vars
+# Astro SSR app on the VPS, proxied by nginx.
+# ============================================================
+nginx_vot_domain: "vot-parlament.ro"
+nginx_vot_aliases: []
+nginx_vot_upstream_host: "127.0.0.1"
+nginx_vot_upstream_port: 4321
+# Keep the existing config filename so the live VPS does not briefly enable two
+# vot configs that define the same nginx upstream/rate-limit zones.
+nginx_vot_config_name: "vot.raduhhr.xyz.conf"
+nginx_vot_enable_tls: true
+nginx_vot_obtain_cert: true
+nginx_vot_hsts: true
+nginx_vot_access_log: "/var/log/nginx/vot_access.log"
+nginx_vot_error_log: "/var/log/nginx/vot_error.log"
+nginx_vot_rate_limit_enabled: true
+nginx_vot_rate_limit_general: "10r/s"
+nginx_vot_rate_limit_api: "4r/s"
+nginx_vot_rate_limit_burst_general: 60
+nginx_vot_rate_limit_burst_api: 20
+nginx_vot_conn_limit: 30

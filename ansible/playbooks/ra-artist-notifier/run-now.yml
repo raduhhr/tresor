@@ -1,0 +1,11 @@
+---
+- name: Run Resident Advisor artist event notifier now
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Run notifier service once
+      ansible.builtin.systemd:
+        name: ra-artist-notifier.service
+        state: started

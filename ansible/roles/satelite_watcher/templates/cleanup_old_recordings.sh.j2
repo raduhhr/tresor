@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RECORDINGS_DIR="{{ satelite_watcher_recordings_dir }}"
+KEEP_DAYS="{{ satelite_watcher_retention_days }}"
+CANONICAL_DIR="$(realpath -m -- "$RECORDINGS_DIR")"
+
+case "$CANONICAL_DIR" in
+  "/"|"/opt"|"/opt/satelite-watcher"|"/mnt"|"/mnt/data"|"/mnt/data/files"|"/home"|"/var"|"/tmp")
+    echo "refusing to clean unsafe path: $CANONICAL_DIR" >&2
+    exit 1
+    ;;
+esac
+
+if [[ ! -d "$CANONICAL_DIR" ]]; then
+  exit 0
+fi
+
+if [[ "$CANONICAL_DIR" != "$RECORDINGS_DIR" ]]; then
+  RECORDINGS_DIR="$CANONICAL_DIR"
+fi
+
+if [[ "$RECORDINGS_DIR" != /*/* ]]; then
+  echo "refusing to clean unexpected path: $RECORDINGS_DIR" >&2
+  exit 1
+fi
+
+find "$RECORDINGS_DIR" -mindepth 3 -maxdepth 3 -type d -mtime +"$KEEP_DAYS" -print0 |
+  while IFS= read -r -d '' old_dir; do
+    rm -rf -- "$old_dir"
+  done
+
+find "$RECORDINGS_DIR" -mindepth 2 -maxdepth 2 -type d -empty -delete
+find "$RECORDINGS_DIR" -mindepth 1 -maxdepth 1 -type d -empty -delete

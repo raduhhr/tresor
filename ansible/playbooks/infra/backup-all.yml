@@ -8,6 +8,7 @@
 - import_playbook: ../grafana/backup.yml
 - import_playbook: ../jellyfin/backup.yml
 - import_playbook: ../jellyfin-music/backup.yml
+- import_playbook: ../satelite-watcher/backup.yml
 - import_playbook: ../paper/backup.yml
 - import_playbook: ../prometheus/backup.yml
 - import_playbook: ../traefik/backup.yml

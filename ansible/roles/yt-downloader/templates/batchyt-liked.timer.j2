@@ -1,0 +1,10 @@
+[Unit]
+Description=Run BatchYT liked videos ingest hourly
+
+[Timer]
+OnCalendar={{ batchyt_timer_on_calendar }}
+RandomizedDelaySec={{ batchyt_timer_randomized_delay }}
+Persistent={{ batchyt_timer_persistent | ternary('true', 'false') }}
+
+[Install]
+WantedBy=timers.target

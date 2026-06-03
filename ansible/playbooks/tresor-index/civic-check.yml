@@ -1,0 +1,94 @@
+- name: Check Tresor Index civic state
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: List Tresor Index containers
+      ansible.builtin.shell: docker ps --filter name=tresor-index
+      register: containers
+      changed_when: false
+
+    - name: Check Civic API health
+      ansible.builtin.shell: curl -fsS http://10.66.66.2:18080/health
+      register: api_health
+      changed_when: false
+      failed_when: false
+
+    - name: Check civic vote coverage by chamber
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT chamber,
+               min(vote_time)::date AS first_vote,
+               max(vote_time)::date AS last_vote,
+               count(*) AS votes
+        FROM parliament_votes
+        GROUP BY chamber
+        ORDER BY chamber;
+        "
+      register: coverage
+      changed_when: false
+
+    - name: Check civic vote coverage by chamber and year
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT chamber,
+               extract(year from vote_time)::int AS year,
+               count(*) AS votes,
+               count(DISTINCT bill_key) AS bills,
+               sum(COALESCE(yes_count,0)) AS yes_positions,
+               sum(COALESCE(no_count,0)) AS no_positions,
+               sum(COALESCE(abstain_count,0)) AS abstain_positions
+        FROM parliament_votes
+        GROUP BY chamber, extract(year from vote_time)::int
+        ORDER BY chamber, year;
+        "
+      register: by_year
+      changed_when: false
+
+    - name: Check normalized civic table counts
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT 'parliament_votes' AS table_name, count(*) FROM parliament_votes
+        UNION ALL SELECT 'parliament_bills', count(*) FROM parliament_bills
+        UNION ALL SELECT 'parliament_politicians', count(*) FROM parliament_politicians
+        UNION ALL SELECT 'parliament_vote_positions', count(*) FROM parliament_vote_positions
+        ORDER BY table_name;
+        "
+      register: civic_counts
+      changed_when: false
+
+    - name: Check recent civic fetch runs
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT source_id, status, started_at, finished_at, items_found, items_new, items_changed, left(COALESCE(error,''), 160) AS error
+        FROM fetch_runs
+        WHERE source_id IN ('cdep_final_votes', 'senat_final_votes')
+        ORDER BY started_at DESC
+        LIMIT 12;
+        "
+      register: recent_civic_runs
+      changed_when: false
+
+    - name: Check civic quarantine count
+      ansible.builtin.shell: |
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT source_id, count(*) AS quarantined
+        FROM quarantine_items
+        WHERE source_id IN ('cdep_final_votes', 'senat_final_votes')
+        GROUP BY source_id
+        ORDER BY source_id;
+        "
+      register: civic_quarantine
+      changed_when: false
+
+    - name: Show civic check output
+      ansible.builtin.debug:
+        msg:
+          containers: "{{ containers.stdout }}"
+          api_health: "{{ api_health.stdout | default(api_health.stderr, true) }}"
+          coverage: "{{ coverage.stdout }}"
+          by_year: "{{ by_year.stdout }}"
+          civic_counts: "{{ civic_counts.stdout }}"
+          recent_civic_runs: "{{ recent_civic_runs.stdout }}"
+          civic_quarantine: "{{ civic_quarantine.stdout }}"

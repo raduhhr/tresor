@@ -1,0 +1,16 @@
+---
+- name: Restart Plane Watcher
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Restart Plane Watcher container
+      community.docker.docker_container:
+        name: plane-watcher
+        state: started
+        restart: true
+
+    - name: Show status after restart
+      ansible.builtin.debug:
+        msg: "Plane Watcher container restarted."

@@ -1,0 +1,18 @@
+---
+- name: Stop Satelite watcher
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop Satelite watcher timer
+      ansible.builtin.systemd:
+        name: satelite-watcher-schedule.timer
+        state: stopped
+        enabled: false
+
+    - name: Stop Satelite watcher service
+      ansible.builtin.systemd:
+        name: satelite-watcher-schedule.service
+        state: stopped
+      failed_when: false

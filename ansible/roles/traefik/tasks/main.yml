@@ -12,8 +12,8 @@
       {{
         {
           'image': tresor_versions.traefik_image,
-          'tz': 'UTC',
-          'domain': 'example.com',
+          'tz': 'Europe/Bucharest',
+          'domain': 'raduhhr.xyz',
           'config_dir': traefik_config_dir,
           'log_level': 'INFO'
         }

@@ -1,0 +1,94 @@
+---
+- import_playbook: backup.yml
+
+- name: Upload Kiwix backup to R2
+  hosts: prod
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_dir: "/mnt/data/files/Backups/kiwix"
+    backup_glob: "kiwix-backup-*.tar.gz"
+    r2_remote_prefix: "{{ tresor_r2_backup_prefix | default('backups') }}/kiwix"
+    r2_retention_days: "{{ tresor_r2_retention_days | default(30) }}"
+    r2_upload_image: "{{ tresor_versions.rclone_image }}"
+    r2_remote_name: "TRESORR2"
+    r2_region: "{{ tresor_r2_region | default('auto') }}"
+    r2_env_file: "/tmp/kiwix-r2.env"
+
+  tasks:
+    - name: Assert R2 backup settings are present
+      ansible.builtin.assert:
+        that:
+          - tresor_r2_bucket | default('') | length > 0
+          - tresor_r2_endpoint | default('') | length > 0
+          - vault_tresor_r2_access_key_id | default('') | length > 0
+          - vault_tresor_r2_secret_access_key | default('') | length > 0
+        fail_msg: "Missing required R2 backup vars for Kiwix offsite upload."
+
+    - name: Find latest local Kiwix backup
+      ansible.builtin.shell: |
+        ls -1t {{ backup_dir }}/{{ backup_glob }} 2>/dev/null | head -1
+      register: _latest_backup
+      changed_when: false
+
+    - name: Fail if no local Kiwix backup exists
+      ansible.builtin.fail:
+        msg: "No local Kiwix backup found in {{ backup_dir }}"
+      when: _latest_backup.stdout | trim | length == 0
+
+    - name: Write temporary R2 env file for Kiwix backup
+      no_log: true
+      ansible.builtin.copy:
+        dest: "{{ r2_env_file }}"
+        mode: "0600"
+        content: |
+          RCLONE_CONFIG_{{ r2_remote_name }}_TYPE=s3
+          RCLONE_CONFIG_{{ r2_remote_name }}_PROVIDER=Cloudflare
+          RCLONE_CONFIG_{{ r2_remote_name }}_ACCESS_KEY_ID={{ vault_tresor_r2_access_key_id }}
+          RCLONE_CONFIG_{{ r2_remote_name }}_SECRET_ACCESS_KEY={{ vault_tresor_r2_secret_access_key }}
+          RCLONE_CONFIG_{{ r2_remote_name }}_REGION={{ r2_region }}
+          RCLONE_CONFIG_{{ r2_remote_name }}_ENDPOINT={{ tresor_r2_endpoint }}
+          RCLONE_CONFIG_{{ r2_remote_name }}_NO_CHECK_BUCKET=true
+
+    - name: Sync Kiwix backup to R2
+      block:
+        - name: Upload latest Kiwix backup to R2
+          ansible.builtin.shell: >
+            docker run --rm
+            --env-file {{ r2_env_file | quote }}
+            -v {{ _latest_backup.stdout | trim | quote }}:/backup/{{ _latest_backup.stdout | trim | basename }}:ro
+            {{ r2_upload_image | quote }}
+            copyto
+            /backup/{{ _latest_backup.stdout | trim | basename }}
+            {{ r2_remote_name }}:{{ tresor_r2_bucket }}/{{ r2_remote_prefix }}/{{ _latest_backup.stdout | trim | basename }}
+
+        - name: Prune remote Kiwix backups older than retention
+          ansible.builtin.shell: >
+            docker run --rm
+            --env-file {{ r2_env_file | quote }}
+            {{ r2_upload_image | quote }}
+            delete
+            --min-age {{ r2_retention_days }}d
+            {{ r2_remote_name }}:{{ tresor_r2_bucket }}/{{ r2_remote_prefix }}
+
+        - name: Verify uploaded Kiwix backup exists in R2
+          ansible.builtin.shell: >
+            docker run --rm
+            --env-file {{ r2_env_file | quote }}
+            {{ r2_upload_image | quote }}
+            lsf {{ r2_remote_name }}:{{ tresor_r2_bucket }}/{{ r2_remote_prefix }} |
+            grep -Fx {{ _latest_backup.stdout | trim | basename | quote }}
+          changed_when: false
+
+        - name: Show uploaded Kiwix offsite object
+          ansible.builtin.debug:
+            msg:
+              local_backup: "{{ _latest_backup.stdout | trim }}"
+              remote_object: "r2://{{ tresor_r2_bucket }}/{{ r2_remote_prefix }}/{{ _latest_backup.stdout | trim | basename }}"
+      always:
+        - name: Remove temporary R2 env file for Kiwix backup
+          ansible.builtin.file:
+            path: "{{ r2_env_file }}"
+            state: absent
+          failed_when: false

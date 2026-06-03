@@ -1,5 +1,5 @@
 ---
-- name: Deploy jellyfin-music (music-only Jellyfin bound to WG IP)
+- name: Deploy Jellyfin Media (public WG-bound instance)
   hosts: tresor
   become: true
   gather_facts: true

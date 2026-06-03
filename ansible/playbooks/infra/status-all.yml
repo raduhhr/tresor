@@ -1,80 +1,254 @@
 ---
-- name: "Tresor — Global container status (with running_for)"
+# ─────────────────────────────────────────────────────────────────────────────
+# Tresor — STATUS ON STEROIDS
+# Run:  ansible-playbook -i inventory/hosts.ini playbooks/infra/status-all.yml
+# ─────────────────────────────────────────────────────────────────────────────
+- name: "Tresor — status on steroids"
   hosts: tresor
   become: true
-  gather_facts: true
-
+  gather_facts: false
   vars:
-    # Leave empty to include ALL containers, or pass a subset at runtime:
-    # -e 'filter_names=["traefik","cloudflared","jellyfin","filebrowser"]'
-    filter_names: []
+    ansible_shell_executable: /bin/bash
 
   tasks:
-    - name: Get host uptime (pretty)
-      ansible.builtin.command: uptime -p
-      register: host_uptime_pretty
+
+    # ── COLLECT PHASE ──────────────────────────────────────────────────────────
+
+    - name: "collect | system"
+      ansible.builtin.shell: |
+        {% raw %}
+        . /etc/os-release 2>/dev/null
+        read up _ < /proc/uptime; u=${up%.*}
+        printf "  %-14s %s\n" "Hostname:"  "$(hostname -f)"
+        printf "  %-14s %s\n" "OS:"        "${PRETTY_NAME:-$(uname -s)}"
+        printf "  %-14s %s\n" "Kernel:"    "$(uname -r)  [$(uname -m)]"
+        printf "  %-14s %s\n" "Uptime:"    "$((u/86400))d $((u%86400/3600))h $((u%3600/60))m $((u%60))s"
+        printf "  %-14s %s\n" "Load avg:"  "$(awk '{print $1, $2, $3}' /proc/loadavg)  (1m 5m 15m)"
+        printf "  %-14s %s\n" "Processes:" "$(awk -F/ '{print $2}' /proc/loadavg) total"
+        printf "  %-14s %s\n" "Now:"       "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        echo ""
+        echo "  ── CPU ─────────────────────────────────────────────────────────"
+        lscpu | grep -E "^(Model name|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|CPU max MHz)" \
+          | awk -F: '{printf "  %-28s%s\n", $1":", $2}'
+        echo ""
+        echo "  ── Memory ──────────────────────────────────────────────────────"
+        free -h --si | awk '{printf "  %s\n", $0}'
+        {% endraw %}
+      register: r_sys
       changed_when: false
 
-    - name: List all containers (JSON lines)
-      ansible.builtin.command: >
-        docker ps -a --format '{{"{{"}}json .{{"}}"}}'
-      register: docker_ps
+    - name: "collect | storage"
+      ansible.builtin.shell: |
+        {% raw %}
+        echo "  ── Disk mounts ─────────────────────────────────────────────────"
+        df -h -x tmpfs -x devtmpfs -x overlay -x squashfs 2>/dev/null \
+          | awk '{printf "  %s\n", $0}'
+        echo ""
+        echo "  ── Docker space ────────────────────────────────────────────────"
+        docker system df 2>/dev/null | awk '{printf "  %s\n", $0}'
+        {% endraw %}
+      register: r_storage
       changed_when: false
 
-    - name: Parse containers from docker ps
-      ansible.builtin.set_fact:
-        containers_list: "{{ docker_ps.stdout_lines | map('from_json') | list }}"
-
-    - name: Optionally filter containers by name
-      ansible.builtin.set_fact:
-        containers_effective: >-
-          {{
-            containers_list
-            if (filter_names | length == 0)
-            else (containers_list | selectattr('Names','in', filter_names) | list)
-          }}
-
-    - name: Gather deep info per container
-      community.docker.docker_container_info:
-        name: "{{ item.Names }}"
-      loop: "{{ containers_effective }}"
-      loop_control:
-        label: "{{ item.Names }}"
-      register: deep
+    - name: "collect | network"
+      ansible.builtin.shell: |
+        {% raw %}
+        echo "  ── Interfaces (IPv4) ───────────────────────────────────────────"
+        ip -br -4 addr | awk '{printf "  %s\n", $0}'
+        echo ""
+        echo "  ── WireGuard ───────────────────────────────────────────────────"
+        if command -v wg >/dev/null 2>&1; then
+          out=$(wg show 2>/dev/null)
+          if [ -n "$out" ]; then echo "$out" | awk '{printf "  %s\n", $0}'
+          else echo "  (no active WireGuard interfaces)"; fi
+        else
+          echo "  (wg not installed)"
+        fi
+        echo ""
+        echo "  ── Listening ports ─────────────────────────────────────────────"
+        ss -tlnp | awk '{printf "  %s\n", $0}'
+        {% endraw %}
+      register: r_net
       changed_when: false
 
-    - name: Build status rows (simple and robust)
-      vars:
-        ci: "{{ item.container }}"
-        ps: "{{ item.item }}"
-      ansible.builtin.set_fact:
-        rows: "{{ (rows | default([])) + [ {
-          'name':        (ci.Name | default(ps.Names)),
-          'running':     (ci.State.Running | default(false)),
-          'status':      (ps.Status | default('unknown')),
-          'image':       (ps.Image | default('n/a')),
-          'ports':       (ps.Ports | default('')),
-          'started_at':  (ci.State.StartedAt | default('')),
-          'running_for': (ps.RunningFor | default(''))
-        } ] }}"
-      loop: "{{ deep.results }}"
-      loop_control:
-        label: "{{ ps.Names }}"
+    - name: "collect | clock & ntp"
+      ansible.builtin.shell: |
+        timedatectl status | awk '{printf "  %s\n", $0}'
+        echo ""
+        echo "  ── Timesync detail ─────────────────────────────────────────────"
+        timedatectl timesync-status 2>/dev/null | awk '{printf "  %s\n", $0}' \
+          || echo "  (timesync-status not available)"
+      register: r_clock
+      changed_when: false
 
-    - name: Show structured status (JSON-friendly)
+    - name: "collect | security"
+      ansible.builtin.shell: |
+        echo "  ── Firewall: INPUT ─────────────────────────────────────────────"
+        iptables -L INPUT -n --line-numbers 2>/dev/null | awk '{printf "  %s\n", $0}' \
+          || echo "  (iptables unavailable)"
+        echo ""
+        echo "  ── Firewall: DOCKER-USER ───────────────────────────────────────"
+        iptables -L DOCKER-USER -n --line-numbers 2>/dev/null | awk '{printf "  %s\n", $0}' \
+          || echo "  (chain not found)"
+        echo ""
+        echo "  ── Fail2Ban: sshd jail ─────────────────────────────────────────"
+        fail2ban-client status sshd 2>/dev/null | awk '{printf "  %s\n", $0}' \
+          || echo "  (fail2ban not running)"
+        echo ""
+        echo "  ── Recent logins (last 8) ──────────────────────────────────────"
+        last -n 8 -F 2>/dev/null | awk '{printf "  %s\n", $0}'
+        echo ""
+        echo "  ── Failed auth attempts (last 5) ───────────────────────────────"
+        lastb -n 5 2>/dev/null | awk '{printf "  %s\n", $0}' \
+          || echo "  (unavailable — needs root or /var/log/btmp)"
+      register: r_sec
+      changed_when: false
+
+    - name: "collect | docker engine"
+      ansible.builtin.shell: |
+        {% raw %}
+        echo "  ── Engine ──────────────────────────────────────────────────────"
+        docker version 2>/dev/null \
+          | grep -E "^\s*(Version|OS/Arch|Built|API version)" \
+          | awk '{printf "  %s\n", $0}'
+        echo ""
+        echo "  ── Info ────────────────────────────────────────────────────────"
+        di=$(docker info --format \
+          '{{.DockerRootDir}}|{{.Containers}}|{{.ContainersRunning}}|{{.ContainersStopped}}|{{.ContainersPaused}}|{{.Images}}|{{.LoggingDriver}}|{{.CgroupDriver}}|{{json .SecurityOptions}}' \
+          2>/dev/null)
+        IFS='|' read -r _root _tot _run _stop _pause _img _log _cgrp _sec <<< "$di"
+        printf "  %-16s %s\n"  "Data root:"    "$_root"
+        printf "  %-16s %s total  (%s running, %s stopped, %s paused)\n" \
+          "Containers:"  "$_tot" "$_run" "$_stop" "$_pause"
+        printf "  %-16s %s\n"  "Images:"       "$_img"
+        printf "  %-16s %s\n"  "Logging drv:"  "$_log"
+        printf "  %-16s %s\n"  "Cgroup drv:"   "$_cgrp"
+        printf "  %-16s %s\n"  "Security:"     "$_sec"
+        echo ""
+        echo "  ── Networks ────────────────────────────────────────────────────"
+        docker network ls --format '{{.Name}}|{{.Driver}}|{{.Scope}}|{{.ID}}' \
+          | column -t -s'|' \
+          | awk '{printf "  %s\n", $0}'
+        echo ""
+        echo "  ── Volumes ─────────────────────────────────────────────────────"
+        docker volume ls --format '{{.Name}}|{{.Driver}}|{{.Mountpoint}}' \
+          | column -t -s'|' \
+          | awk '{printf "  %s\n", $0}' \
+          | head -30
+        {% endraw %}
+      register: r_docker
+      changed_when: false
+
+    - name: "collect | containers"
+      ansible.builtin.shell: |
+        {% raw %}
+        printf "  %-2s  %-24s %-45s %-22s %s\n" "ST" "NAME" "IMAGE" "UPTIME" "PORTS"
+        printf "  %s\n" "$(printf '─%.0s' {1..130})"
+        docker ps -a \
+          --format '{{.Names}}|{{.Image}}|{{.RunningFor}}|{{.Status}}|{{.Ports}}' \
+          | sort \
+          | while IFS='|' read -r name image upfor status ports; do
+              if echo "$status" | grep -q "^Up"; then st="✔"; else st="✘"; fi
+              printf "  %s   %-24s %-45s %-22s %s\n" \
+                "$st" "$name" "${image:0:45}" "${upfor:0:22}" "${ports:0:90}"
+              # bind mounts
+              docker inspect \
+                --format '{{range .Mounts}}{{if eq .Type "bind"}}    ↳ bind  {{.Source}} → {{.Destination}}{{if .RW}} (rw){{else}} (ro){{end}}{{"\n"}}{{end}}{{end}}' \
+                "$name" 2>/dev/null | grep -v '^$'
+              # restart + created
+              docker inspect \
+                --format '    ↳ restart={{.HostConfig.RestartPolicy.Name}}  created={{slice .Created 0 19}}  id={{slice .Id 0 12}}' \
+                "$name" 2>/dev/null
+              echo ""
+          done
+        {% endraw %}
+      register: r_containers
+      changed_when: false
+
+    - name: "collect | prometheus targets (API)"
+      ansible.builtin.uri:
+        url: "http://192.0.2.10:9090/api/v1/targets"
+      register: r_prom
+      failed_when: false
+      changed_when: false
+
+    - name: "collect | service access map"
+      ansible.builtin.shell: |
+        {% raw %}
+        printf "  %-24s %-38s %-42s %s\n" "SERVICE" "BIND:PORT" "BIND MOUNTS (config/data)" "RESTART"
+        printf "  %s\n" "$(printf '─%.0s' {1..130})"
+        docker ps -a \
+          --format '{{.Names}}|{{.Ports}}|{{.Status}}' \
+          | sort \
+          | while IFS='|' read -r name ports status; do
+              if echo "$status" | grep -q "^Up"; then st="✔"; else st="✘"; fi
+              dirs=$(docker inspect \
+                --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}  {{end}}{{end}}' \
+                "$name" 2>/dev/null | tr ' ' '\n' | grep -v '^$' | head -3 | paste -sd '  ')
+              rp=$(docker inspect \
+                --format '{{.HostConfig.RestartPolicy.Name}}' \
+                "$name" 2>/dev/null)
+              printf "  %s %-22s %-38s %-42s %s\n" \
+                "$st" "$name" "${ports:0:38}" "${dirs:0:42}" "$rp"
+          done
+        echo ""
+        echo "  ── Open host ports (ss summary) ────────────────────────────────"
+        ss -tlnp | grep -E 'LISTEN' | awk '{printf "  %s\n", $0}'
+        {% endraw %}
+      register: r_services
+      changed_when: false
+
+    # ── DISPLAY PHASE ──────────────────────────────────────────────────────────
+
+    - name: "══════════════════════ SYSTEM ══════════════════════════════════════"
       ansible.builtin.debug:
-        msg:
-          host: "{{ inventory_hostname }}"
-          host_uptime_pretty: "{{ host_uptime_pretty.stdout | default('n/a') }}"
-          containers: "{{ rows | default([]) }}"
-      changed_when: false
+        msg: "{{ r_sys.stdout }}"
 
-    - name: Friendly summary (one-liner)
-      vars:
-        total:   "{{ rows | default([]) | length }}"
-        running: "{{ rows | default([]) | selectattr('running','equalto',true)  | list | length }}"
-        stopped: "{{ rows | default([]) | selectattr('running','equalto',false) | list | length }}"
+    - name: "══════════════════════ STORAGE ═════════════════════════════════════"
       ansible.builtin.debug:
-        msg: "{{ total }} containers — {{ running }} running, {{ stopped }} stopped."
-      changed_when: false
+        msg: "{{ r_storage.stdout }}"
 
+    - name: "══════════════════════ NETWORK ═════════════════════════════════════"
+      ansible.builtin.debug:
+        msg: "{{ r_net.stdout }}"
+
+    - name: "══════════════════════ CLOCK & NTP ═════════════════════════════════"
+      ansible.builtin.debug:
+        msg: "{{ r_clock.stdout }}"
+
+    - name: "══════════════════════ SECURITY ════════════════════════════════════"
+      ansible.builtin.debug:
+        msg: "{{ r_sec.stdout }}"
+
+    - name: "══════════════════════ DOCKER ENGINE ═══════════════════════════════"
+      ansible.builtin.debug:
+        msg: "{{ r_docker.stdout }}"
+
+    - name: "══════════════════════ CONTAINERS ══════════════════════════════════"
+      ansible.builtin.debug:
+        msg: "{{ r_containers.stdout }}"
+
+    - name: "══════════════════════ MONITORING — PROMETHEUS TARGETS ═════════════"
+      vars:
+        at: "{{ r_prom.json.data.activeTargets | default([]) if r_prom.status | default(0) == 200 else [] }}"
+        dt: "{{ r_prom.json.data.droppedTargets | default([]) if r_prom.status | default(0) == 200 else [] }}"
+        unreachable: "{{ r_prom.status | default(0) != 200 }}"
+      ansible.builtin.debug:
+        msg: >-
+          {% if unreachable %}
+          (Prometheus not reachable at :9090)
+          {% else %}
+          Active targets: {{ at | length }}  |  Dropped: {{ dt | length }}
+
+          {% for t in at | sort(attribute='labels.job') %}
+          {{ '✔' if t.health == 'up' else '✘' }}  {{ (t.labels.job | default('?') ~ '                  ')[:18] }}  {{ (t.labels.instance | default('?') ~ '                                ')[:32] }}  interval={{ (t.scrapeInterval | default('?') ~ '        ')[:8] }}  lastScrape={{ t.lastScrape | default('?') | regex_replace('\\.[0-9]+Z$','Z') }}{% if t.health != 'up' %}  ERR={{ t.lastError | default('?') }}{% endif %}
+
+          {% endfor %}
+          {% if dt | length > 0 %}
+          Dropped targets: {{ dt | length }}
+          {% endif %}
+          {% endif %}
+
+    - name: "══════════════════════ SERVICE ACCESS MAP ══════════════════════════"
+      ansible.builtin.debug:
+        msg: "{{ r_services.stdout }}"

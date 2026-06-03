@@ -23,22 +23,71 @@
 
 - name: Ensure Grafana provisioning directories exist
   ansible.builtin.file:
-    path: "{{ grafana_config_dir }}/provisioning/{{ item }}"
+    path: "{{ item }}"
     state: directory
     owner: "472"
     group: "472"
     mode: "0755"
   loop:
-    - datasources
-    - dashboards
+    - "{{ grafana_config_dir }}/provisioning/datasources"
+    - "{{ grafana_config_dir }}/provisioning/dashboards"
+    - "{{ grafana_config_dir }}/provisioning/dashboards/json"
+    - "{{ grafana_config_dir }}/provisioning/plugins"
+    - "{{ grafana_config_dir }}/provisioning/alerting"
 
-- name: Provision Prometheus datasource
-  ansible.builtin.template:
-    src: datasource.yml.j2
-    dest: "{{ grafana_config_dir }}/provisioning/datasources/prometheus.yml"
-    owner: "472"
-    group: "472"
-    mode: "0644"
+- name: Remove stale unsupported Grafana piechart plugin
+  ansible.builtin.file:
+    path: "{{ grafana_data_dir }}/plugins/grafana-piechart-panel"
+    state: absent
+
+- name: Find legacy Grafana datasource provisioning files
+  ansible.builtin.find:
+    paths: "{{ grafana_config_dir }}/provisioning/datasources"
+    patterns:
+      - "*.yml"
+      - "*.yaml"
+    file_type: file
+  register: _grafana_legacy_datasource_files
+
+- name: Remove legacy Grafana datasource provisioning files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _grafana_legacy_datasource_files.files }}"
+
+- name: Find legacy Grafana dashboard provider files
+  ansible.builtin.find:
+    paths: "{{ grafana_config_dir }}/provisioning/dashboards"
+    patterns:
+      - "*.yml"
+      - "*.yaml"
+    file_type: file
+    recurse: false
+  register: _grafana_legacy_dashboard_provider_files
+  when: grafana_manage_dashboards | bool
+
+- name: Remove legacy Grafana dashboard provider files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _grafana_legacy_dashboard_provider_files.files }}"
+  when: grafana_manage_dashboards | bool
+
+- name: Find legacy Grafana dashboard JSON files
+  ansible.builtin.find:
+    paths: "{{ grafana_config_dir }}/provisioning/dashboards/json"
+    patterns:
+      - "*.json"
+    file_type: file
+  register: _grafana_legacy_dashboard_json_files
+  when: grafana_manage_dashboards | bool
+
+- name: Remove legacy Grafana dashboard JSON files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _grafana_legacy_dashboard_json_files.files }}"
+  when: grafana_manage_dashboards | bool
 
 - name: Build Grafana environment variables
   ansible.builtin.set_fact:
@@ -56,6 +105,9 @@
       GF_USERS_ALLOW_ORG_CREATE: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_PATHS_PROVISIONING: "/etc/grafana/provisioning"
+      GF_LOG_MODE: "console file"
+      GF_LOG_FILE_MAX_DAYS: "0"
+      GF_PLUGINS_PREINSTALL_SYNC: "{{ grafana_install_plugins | join(',') }}"
   no_log: true
 
 - name: Build Grafana networks list
@@ -84,23 +136,21 @@
 
 - name: Run Grafana container
   community.docker.docker_container:
-    name: grafana
+    name: "{{ grafana_container_name }}"
     image: "{{ grafana_image }}"
     pull: true
     restart_policy: unless-stopped
+    comparisons:
+      networks: strict
     ports: "{{ _grafana_ports }}"
     networks: "{{ _grafana_networks_list }}"
     labels: "{{ _grafana_labels }}"
-
     env: "{{ _grafana_env }}"
-
     volumes:
       - "{{ grafana_config_dir }}/provisioning:/etc/grafana/provisioning:ro"
       - "{{ grafana_data_dir }}:/var/lib/grafana"
-
-    user: "472:472"
+    user: "{{ grafana_user }}"
     state: started
-
 
 - name: Wait for Grafana container to be running
   community.docker.docker_container_info:
@@ -108,28 +158,21 @@
   register: _container_info
   retries: 10
   delay: 2
-  until: 
+  until:
     - _container_info.exists
     - _container_info.container.State.Running
   changed_when: false
 
-- name: Wait for Grafana to be healthy (via docker exec)
-  ansible.builtin.command: >
-    docker exec {{ grafana_container_name }} 
-    wget -q -O- http://localhost:{{ grafana_port }}/api/health
-  register: _health_check
-  retries: 15
-  delay: 2
-  until: _health_check.rc == 0
-  changed_when: false
+- name: Reconcile Grafana datasource and dashboards via API
+  ansible.builtin.include_tasks: sync_api.yml
 
 - name: Show Grafana deployment summary
   ansible.builtin.debug:
     msg:
-      - "✅ Grafana deployed successfully!"
+      - "Grafana deployed successfully!"
       - "Container: {{ grafana_container_name }}"
       - "Access URL: {{ grafana_root_url }}"
       - "Admin user: {{ grafana_admin_user }}"
-      - "Networks: {{ grafana_networks | join(', ') }}"
+      - "Networks: {{ _container_info.container.NetworkSettings.Networks.keys() | list | join(', ') }}"
       - "Traefik: {{ 'enabled' if grafana_enable_traefik else 'disabled (LAN-only)' }}"
-      - "Datasource: Prometheus (auto-provisioned)"
+      - "Datasources: Prometheus, Tresor Index Postgres (auto-managed via API)"

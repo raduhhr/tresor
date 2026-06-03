@@ -1,0 +1,9 @@
+---
+- name: "Update Satelite watcher - backup"
+  import_playbook: backup.yml
+
+- name: "Update Satelite watcher - deploy"
+  import_playbook: deploy.yml
+
+- name: "Update Satelite watcher - status"
+  import_playbook: status.yml

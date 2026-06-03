@@ -41,12 +41,12 @@
     path: "/etc/letsencrypt/live/{{ nginx_music_domain }}/fullchain.pem"
   register: _music_cert
 
-# ---- Step 1: Render HTTP bootstrap config if no cert
-- name: Render HTTP bootstrap nginx config (no cert yet)
+# ---- Step 1: Render HTTP bootstrap media vhost if no cert
+- name: Render HTTP bootstrap media nginx config (no cert yet)
   become: true
   ansible.builtin.template:
     src: music.http.nginx.j2
-    dest: /etc/nginx/sites-available/music.conf
+    dest: /etc/nginx/sites-available/media.conf
     mode: "0644"
   when:
     - nginx_music_enable_tls | bool
@@ -54,12 +54,26 @@
   notify: reload nginx
 
 # ---- Step 1b: Enable site + disable default (safe on both paths)
-- name: Enable music site
+- name: Enable media site
   become: true
   ansible.builtin.file:
-    src: /etc/nginx/sites-available/music.conf
-    dest: /etc/nginx/sites-enabled/music.conf
+    src: /etc/nginx/sites-available/media.conf
+    dest: /etc/nginx/sites-enabled/media.conf
     state: link
+  notify: reload nginx
+
+- name: Remove legacy music site symlink
+  become: true
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/music.conf
+    state: absent
+  notify: reload nginx
+
+- name: Remove legacy music site file
+  become: true
+  ansible.builtin.file:
+    path: /etc/nginx/sites-available/music.conf
+    state: absent
   notify: reload nginx
 
 - name: Disable default site (if present)
@@ -123,12 +137,12 @@
     path: "/etc/letsencrypt/live/{{ nginx_music_domain }}/fullchain.pem"
   register: _music_cert_after
 
-# ---- Step 3: Render TLS config if cert exists
-- name: Render TLS nginx config (cert present)
+# ---- Step 3: Render TLS media vhost if cert exists
+- name: Render TLS media nginx config (cert present)
   become: true
   ansible.builtin.template:
     src: music.tls.nginx.j2
-    dest: /etc/nginx/sites-available/music.conf
+    dest: /etc/nginx/sites-available/media.conf
     mode: "0644"
   when:
     - nginx_music_enable_tls | bool

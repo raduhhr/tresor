@@ -1,0 +1,24 @@
+---
+# Adds the raduhhr.xyz static site vhost to the existing nginx on tresor-vps.
+#
+# Uses the nginx-music role with tasks_from: site.
+# nginx is already installed and running (same instance serving media/cloud).
+#
+# Normal migration flow:
+#   1. Run the GitHub Actions deploy once so /var/www/raduhhr.xyz has content.
+#   2. Run this playbook from the TUI before DNS cutover.
+#      It bootstraps the HTTP vhost and will not fail the play if ACME
+#      cannot validate yet because DNS still points elsewhere.
+#   3. Update Cloudflare DNS to the VPS.
+#   4. Re-run this same playbook after DNS cutover to obtain the cert + enable TLS.
+
+- name: "VPS | raduhhr.xyz static site"
+  hosts: vps
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Add raduhhr.xyz static vhost to nginx-music
+      ansible.builtin.include_role:
+        name: nginx-music
+        tasks_from: site

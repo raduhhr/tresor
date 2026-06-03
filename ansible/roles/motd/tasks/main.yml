@@ -1,0 +1,24 @@
+---
+- name: Ensure update-motd directory exists
+  ansible.builtin.file:
+    path: /etc/update-motd.d
+    state: directory
+    mode: "0755"
+
+- name: Install Tresor MOTD script
+  ansible.builtin.template:
+    src: 10-tresor.j2
+    dest: /etc/update-motd.d/10-tresor
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install static /etc/motd header
+  ansible.builtin.copy:
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Welcome to Tresor - self-hosted, modular, secure homelab.
+      Unauthorized access is prohibited.

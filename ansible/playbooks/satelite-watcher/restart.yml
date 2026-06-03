@@ -1,0 +1,20 @@
+---
+- name: Restart Satelite watcher
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Restart Satelite watcher timer
+      ansible.builtin.systemd:
+        name: satelite-watcher-schedule.timer
+        state: restarted
+        enabled: true
+
+    - name: Trigger Satelite watcher service
+      ansible.builtin.command: systemctl start satelite-watcher-schedule.service
+      changed_when: true
+
+    - name: Show status after restart
+      ansible.builtin.debug:
+        msg: "Satelite watcher timer restarted and schedule refresh triggered."

@@ -1,5 +1,5 @@
 ---
-- name: "Restore jellyfin-music — validate, wipe, extract, redeploy"
+- name: "Restore Jellyfin Media - validate, wipe, extract, redeploy"
   hosts: tresor
   become: true
   gather_facts: false
@@ -15,7 +15,6 @@
     confirm_restore: "no"
 
   tasks:
-
     - name: Find latest backup
       ansible.builtin.shell: |
         ls -1t {{ backup_dir }}/jellyfin-music-backup-*.tar.gz 2>/dev/null | head -1
@@ -48,7 +47,7 @@
       register: _tar_list
       changed_when: false
 
-    - name: Fail if tarball structure wrong
+    - name: Fail if tarball structure is wrong
       ansible.builtin.fail:
         msg: "Tarball doesn't contain {{ tar_dir }}/. Got: {{ _tar_list.stdout_lines[:5] }}"
       when: _tar_list.stdout_lines | select('match', '^' ~ tar_dir ~ '/') | list | length == 0
@@ -59,10 +58,10 @@
           backup: "{{ _restore_file | basename }}"
           size_mb: "{{ (_backup_stat.stat.size / 1048576) | round(1) }}"
 
-    - name: "⚠️  Confirm restore"
+    - name: Confirm restore
       ansible.builtin.pause:
         prompt: |
-          Restoring jellyfin-music from {{ _restore_file | basename }}
+          Restoring Jellyfin Media from {{ _restore_file | basename }}
           This will WIPE {{ data_dir }} and redeploy. Type 'yes' to proceed
       register: _confirm
       when: confirm_restore | lower != 'yes'
@@ -110,7 +109,7 @@
       ansible.builtin.file:
         path: "{{ tar_base }}"
         state: directory
-        mode: '0755'
+        mode: "0755"
 
     - name: Extract backup
       ansible.builtin.shell: |
@@ -134,5 +133,5 @@
         group: "{{ restore_group }}"
         recurse: true
 
-- name: "Restore jellyfin-music — redeploy"
+- name: "Restore Jellyfin Media - redeploy"
   import_playbook: deploy.yml

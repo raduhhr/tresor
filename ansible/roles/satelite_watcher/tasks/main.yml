@@ -1,0 +1,45 @@
+---
+- name: End host if Satelite watcher recorder is disabled
+  ansible.builtin.meta: end_host
+  when: not satelite_watcher_enabled | bool
+
+- name: Assert required Satelite Watcher settings
+  ansible.builtin.assert:
+    that:
+      - satelite_watcher_scheduler_user == 'root'
+      - satelite_watcher_filter_mode in ['all', 'filtered']
+      - satelite_watcher_interval_minutes | int > 0
+      - satelite_watcher_lookahead_hours | int > 0
+      - satelite_watcher_satellites | length > 0
+      - satelite_watcher_location_latitude is number
+      - satelite_watcher_location_longitude is number
+      - satelite_watcher_frequency_plan_validated | bool
+      - satelite_watcher_satellites | map(attribute='frequency_hz') | select('defined') | list | length == satelite_watcher_satellites | length
+      - not (satelite_watcher_noaa_apt_enabled | bool) or satelite_watcher_noaa_apt_satellites | length > 0
+      - not (satelite_watcher_noaa_apt_enabled | bool) or satelite_watcher_noaa_apt_satellites | map(attribute='frequency_hz') | select('defined') | list | length == satelite_watcher_noaa_apt_satellites | length
+      - satelite_watcher_discord_webhook_url | length == 0 or satelite_watcher_discord_webhook_url is match('^https://discord\\.com/api/webhooks/.+')
+      - satelite_watcher_satdump_version | string | length > 0
+    fail_msg: >-
+      Satelite watcher vars are incomplete or incompatible with the current
+      systemd-run implementation. This role currently schedules system-scope
+      transient units, so satelite_watcher_scheduler_user must stay set to root, and
+      unattended recording stays disabled until weather satellite frequencies are
+      validated on-air for this station.
+
+- name: Import user setup
+  ansible.builtin.import_tasks: user.yml
+
+- name: Import directory setup
+  ansible.builtin.import_tasks: dirs.yml
+
+- name: Import SatDump and Python runtime setup
+  ansible.builtin.import_tasks: satdump.yml
+
+- name: Import configuration setup
+  ansible.builtin.import_tasks: config.yml
+
+- name: Import script installation
+  ansible.builtin.import_tasks: scripts.yml
+
+- name: Import systemd setup
+  ansible.builtin.import_tasks: systemd.yml

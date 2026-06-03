@@ -1,0 +1,17 @@
+# Tresor Index source registry.
+# RSS sources are the first-class/default input. Keep scraping modules behind
+# explicit source entries so collectors stay disposable and schema-bound.
+sources:
+{% for source in tresor_index_sources %}
+  - id: {{ source.id | to_json }}
+    name: {{ source.name | to_json }}
+    type: {{ source.type | default('rss') | to_json }}
+    category: {{ source.category | to_json }}
+    url: {{ source.url | to_json }}
+    enabled: {{ source.enabled | default(true) | bool | lower }}
+    interval_minutes: {{ source.interval_minutes | default(60) | int }}
+    parser: {{ source.parser | default('rss_article') | to_json }}
+    config: {{ source.config | default({}) | to_json }}
+{% else %}
+  []
+{% endfor %}

@@ -13,15 +13,15 @@ set -euo pipefail
 # ==========================
 ANSIBLE_USER="${ANSIBLE_USER:-ansible}"
 # Recommended: pass your pubkey at runtime:
-#   ANSIBLE_PUBKEY="$(cat ~/.ssh/id_ed25519_homelab.pub)" SET_HOSTNAME="tresor-vm" sudo -E ./init-tresor.sh
-ANSIBLE_PUBKEY="${ANSIBLE_PUBKEY:-ssh-ed25519 AAAA...paste_your_pubkey_here... ansible@homelab}"
+#   ANSIBLE_PUBKEY="$(cat ~/.ssh/id_ed25519_tresor.pub)" SET_HOSTNAME="tresor-vm" sudo -E ./init-tresor.sh
+ANSIBLE_PUBKEY="${ANSIBLE_PUBKEY:-ssh-ed25519 AAAA...paste_your_pubkey_here... ansible@tresor}"
 
 # Optionally set a hostname (leave blank to skip)
 # e.g., SET_HOSTNAME="tresor" or "tresor-vm"
 SET_HOSTNAME="${SET_HOSTNAME:-}"
 
 # Optionally restrict logins to specific users (space-separated), empty = no restriction
-# e.g., ALLOW_USERS="ansible admin" (during transition), later just "ansible"
+# e.g., ALLOW_USERS="ansible radu" (during transition), later just "ansible"
 ALLOW_USERS="${ALLOW_USERS:-}"
 
 # ==========================
@@ -145,6 +145,6 @@ if [[ -n "${ALLOW_USERS// }" ]]; then
 fi
 echo
 echo "Next steps (from your workstation):"
-echo "  ssh -i ~/.ssh/id_ed25519_homelab ${ANSIBLE_USER}@${ip_show:-<tresor-ip>}"
+echo "  ssh -i ~/.ssh/id_ed25519_tresor ${ANSIBLE_USER}@${ip_show:-<tresor-ip>}"
 echo "  # then run your Ansible playbooks"
 

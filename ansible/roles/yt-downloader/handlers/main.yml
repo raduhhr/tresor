@@ -1,0 +1,10 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart batchyt liked timer
+  ansible.builtin.systemd:
+    name: batchyt-liked.timer
+    state: restarted
+  when: batchyt_liked_enabled | bool

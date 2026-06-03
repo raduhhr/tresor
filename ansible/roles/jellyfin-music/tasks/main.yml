@@ -64,7 +64,7 @@
 # -------------------------------------------------------------------
 # 2) Ensure config dirs exist
 # -------------------------------------------------------------------
-- name: Ensure Jellyfin Music config dir exists
+- name: Ensure Jellyfin Media config dir exists
   ansible.builtin.file:
     path: "{{ jellyfin_music_config_dir }}"
     state: directory
@@ -73,7 +73,7 @@
     mode: "0775"
     recurse: true
 
-- name: Ensure required subdirs exist (config/, log/)
+- name: Ensure required config/runtime subdirs exist
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
@@ -83,21 +83,65 @@
   loop:
     - "{{ jellyfin_music_config_dir }}/config"
     - "{{ jellyfin_music_config_dir }}/log"
+    - "{{ jellyfin_music_cache_dir }}"
+    - "{{ jellyfin_music_config_dir }}/metadata"
+    - "{{ jellyfin_music_config_dir }}/transcodes"
+    - "{{ jellyfin_music_config_dir }}/data"
+    - "{{ jellyfin_music_config_dir }}/data/metadata"
+    - "{{ jellyfin_music_config_dir }}/data/transcodes"
+    - "{{ jellyfin_music_config_dir }}/root"
+    - "{{ jellyfin_music_config_dir }}/root/default"
+    - "{{ jellyfin_music_config_dir }}/root/default/metadata"
+    - "{{ jellyfin_music_config_dir }}/root/default/transcodes"
+
+- name: Repair legacy Jellyfin migration state files under the Jellyfin Media config root
+  ansible.builtin.shell: |
+    set -eu
+    files="$(find "{{ jellyfin_music_config_dir }}" -maxdepth 3 -type f \( -name migrations.xml -o -name migration.xml \) 2>/dev/null | sort || true)"
+    if [ -z "$files" ]; then
+      echo missing
+      exit 0
+    fi
+    changed=0
+    for MIGFILE in $files; do
+      if [ "$(basename "$MIGFILE")" = "migration.xml" ]; then
+        rm -f "$MIGFILE"
+        changed=1
+        continue
+      fi
+      BACKUP="${MIGFILE}.backup"
+      if grep -q '<migrations' "$MIGFILE"; then
+        if [ -f "$BACKUP" ] && grep -q '<MigrationOptions' "$BACKUP"; then
+          cp "$BACKUP" "$MIGFILE"
+          changed=1
+        else
+          rm -f "$MIGFILE"
+          changed=1
+        fi
+      fi
+    done
+    if [ "$changed" -eq 1 ]; then
+      echo fixed
+    else
+      echo ok
+    fi
+  register: _jf_music_migrations_fix
+  changed_when: _jf_music_migrations_fix.stdout == 'fixed'
 
 # -------------------------------------------------------------------
-# 3) Assert music dir exists
+# 3) Assert primary media directory exists
 # -------------------------------------------------------------------
-- name: Assert music directory exists on host
+- name: Assert primary media directory exists on host
   ansible.builtin.stat:
     path: "{{ jellyfin_music_media_dir }}"
   register: _music_stat
 
-- name: Fail if music dir missing
+- name: Fail if primary media directory is missing
   ansible.builtin.assert:
     that:
       - _music_stat.stat.exists
       - _music_stat.stat.isdir
-    fail_msg: "Music dir does not exist: {{ jellyfin_music_media_dir }}"
+    fail_msg: "Primary media directory does not exist: {{ jellyfin_music_media_dir }}"
 
 # -------------------------------------------------------------------
 # 3b) Assert movies and TV shows dirs exist
@@ -129,7 +173,31 @@
 # -------------------------------------------------------------------
 # 4) Port sanity check (avoid collisions)
 # -------------------------------------------------------------------
-- name: Ensure Jellyfin Music host port is free (best-effort)
+- name: Check if Jellyfin Media container already exists
+  community.docker.docker_container_info:
+    name: "{{ jellyfin_music_container_name }}"
+  register: _jf_music_existing
+  failed_when: false
+  changed_when: false
+
+- name: Compute whether existing Jellyfin Media owns desired host port
+  ansible.builtin.set_fact:
+    _jf_music_owns_desired_port: >-
+      {{
+        (_jf_music_existing.exists | default(false))
+        and (_jf_music_existing.container.State.Running | default(false))
+        and (_jf_music_existing.container.NetworkSettings.Ports is mapping)
+        and (_jf_music_existing.container.NetworkSettings.Ports['8096/tcp'] is defined)
+        and (
+          _jf_music_existing.container.NetworkSettings.Ports['8096/tcp']
+          | selectattr('HostIp', 'equalto', jellyfin_music_bind_addr | string)
+          | selectattr('HostPort', 'equalto', jellyfin_music_listen_port | string)
+          | list
+          | length
+        ) > 0
+      }}
+
+- name: Ensure Jellyfin Media host port is free (best-effort)
   ansible.builtin.shell: |
     set -euo pipefail
     ss -tln "( sport = :{{ jellyfin_music_listen_port }} )" | tail -n +2 | wc -l
@@ -138,18 +206,20 @@
   register: _pcheck
   changed_when: false
 
-- name: Fail if Jellyfin Music port is already bound
+- name: Fail if Jellyfin Media port is already bound
   ansible.builtin.assert:
-    that: "{{ _pcheck.stdout | int == 0 }}"
+    that:
+      - (_pcheck.stdout | int == 0) or (_jf_music_owns_desired_port | bool)
     fail_msg: "Port {{ jellyfin_music_listen_port }} already in use on host."
 
 # -------------------------------------------------------------------
 # 5) Build volumes/devices
 # -------------------------------------------------------------------
-- name: Build Jellyfin Music volumes (multi-media)
+- name: Build Jellyfin Media volumes (multi-media)
   ansible.builtin.set_fact:
     jellyfin_music_volumes:
       - "{{ jellyfin_music_config_dir }}:/config"
+      - "{{ jellyfin_music_cache_dir }}:/cache"
       - "/etc/localtime:/etc/localtime:ro"
       - "{{ jellyfin_music_media_dir }}:/media/music:ro"
       - "{{ jellyfin_music_movies_dir }}:/media/movies:ro"
@@ -162,7 +232,7 @@
 # -------------------------------------------------------------------
 # 6) Run container
 # -------------------------------------------------------------------
-- name: Run Jellyfin Music container (recreate + publish)
+- name: Run Jellyfin Media container (recreate + publish)
   community.docker.docker_container:
     name: "{{ jellyfin_music_container_name }}"
     image: "{{ jellyfin_music_image }}"
@@ -184,7 +254,37 @@
     volumes: "{{ jellyfin_music_volumes }}"
     devices: "{{ jellyfin_music_devices }}"
     env:
-      TZ: "UTC"
+      TZ: "Europe/Bucharest"
+  become: true
+
+- name: Find Jellyfin Media library options
+  ansible.builtin.find:
+    paths:
+      - "{{ jellyfin_music_config_dir }}/root/default"
+      - "{{ jellyfin_music_config_dir }}/config/root/default"
+    patterns: options.xml
+    recurse: true
+    file_type: file
+  register: jellyfin_music_library_options
+  failed_when: false
+  changed_when: false
+  become: true
+
+- name: Keep Jellyfin Media LUFS scan disabled
+  ansible.builtin.replace:
+    path: "{{ item.path }}"
+    regexp: '<EnableLUFSScan>true</EnableLUFSScan>'
+    replace: '<EnableLUFSScan>false</EnableLUFSScan>'
+  loop: "{{ jellyfin_music_library_options.files | default([]) }}"
+  register: jellyfin_music_lufs_scan
+  when: not (jellyfin_music_enable_lufs_scan | bool)
+  become: true
+
+- name: Restart Jellyfin Media after LUFS option changes
+  ansible.builtin.command: "docker restart {{ jellyfin_music_container_name }}"
+  when:
+    - jellyfin_music_lufs_scan is defined
+    - jellyfin_music_lufs_scan is changed
   become: true
 
 

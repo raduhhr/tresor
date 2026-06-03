@@ -1,0 +1,15 @@
+[Unit]
+Description=Record Satelite Watcher pass %i
+After=network.target
+
+[Service]
+Type=oneshot
+User={{ satelite_watcher_user }}
+Group={{ satelite_watcher_group }}
+WorkingDirectory={{ satelite_watcher_root }}
+Environment=HOME={{ satelite_watcher_root }}
+Environment=XDG_CONFIG_HOME={{ satelite_watcher_xdg_config_home }}
+EnvironmentFile=-{{ satelite_watcher_notify_env_file }}
+ExecStart={{ satelite_watcher_bin_dir }}/record_pass.sh %i
+StandardOutput=append:{{ satelite_watcher_logs_dir }}/record.log
+StandardError=append:{{ satelite_watcher_logs_dir }}/record.log

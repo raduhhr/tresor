@@ -1,11 +1,11 @@
 ---
-- name: VPS | nginx-music reverse proxy (Jellyfin Music over WireGuard)
+- name: VPS | media reverse proxy (public Jellyfin over WireGuard)
   hosts: vps
   become: true
   gather_facts: true
 
   vars:
-    nginx_music_domain: "music.example.com"
+    nginx_music_domain: "media.raduhhr.xyz"
     nginx_music_upstream_host: "10.66.66.2"
     nginx_music_upstream_port: 18096
     nginx_music_enable_tls: true
@@ -28,4 +28,3 @@
 
   roles:
     - role: nginx-music
-

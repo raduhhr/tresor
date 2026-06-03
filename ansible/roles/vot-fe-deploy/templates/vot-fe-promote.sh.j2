@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+staging_root="{{ vot_fe_staging_root }}"
+releases_root="{{ vot_fe_releases_root }}"
+current_path="{{ vot_fe_current_path }}"
+runtime_user="{{ vot_fe_runtime_user }}"
+runtime_group="{{ vot_fe_runtime_group }}"
+service_name="{{ vot_fe_service_name }}"
+keep_releases="{{ vot_fe_keep_releases }}"
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: vot-fe-promote STAGING_DIR" >&2
+  exit 64
+fi
+
+stage="$(realpath -m "$1")"
+root="$(realpath -m "$staging_root")"
+case "$stage/" in
+  "$root"/*) ;;
+  *)
+    echo "refusing staging path outside $root: $stage" >&2
+    exit 65
+    ;;
+esac
+
+if [[ ! -f "$stage/dist/server/entry.mjs" || ! -d "$stage/dist/client" ]]; then
+  echo "staging directory must contain a built Astro SSR dist/" >&2
+  exit 66
+fi
+
+release_name="$(basename "$stage")"
+if [[ ! "$release_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "unsafe release name: $release_name" >&2
+  exit 67
+fi
+
+release="$releases_root/$release_name"
+if [[ -e "$release" ]]; then
+  echo "release already exists: $release" >&2
+  exit 68
+fi
+
+install -d -m 0755 "$releases_root"
+install -d -m 0755 "$release"
+cp -a "$stage/." "$release/"
+chown -R "$runtime_user:$runtime_group" "$release"
+
+ln -sfn "$release" "$current_path.next"
+mv -Tf "$current_path.next" "$current_path"
+
+systemctl daemon-reload
+systemctl restart "$service_name.service"
+systemctl is-active --quiet "$service_name.service"
+
+rm -rf "$stage"
+
+find "$releases_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
+  | sort -rn \
+  | awk -v keep="$keep_releases" 'NR > keep {print $2}' \
+  | xargs -r rm -rf
+
+echo "promoted vot-FE release $release_name"

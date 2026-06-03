@@ -2,6 +2,9 @@
 - name: Setup Paper backup snapshot (daily with 30-day retention)
   hosts: tresor
   become: true
+  vars:
+    paper_data_parent: "{{ paper_data_dir | dirname }}"
+    paper_data_leaf: "{{ paper_data_dir | basename }}"
   tasks:
 
     - name: Ensure paper backup directory exists
@@ -23,11 +26,14 @@
           set -euo pipefail
 
           BACKUP_DIR="/mnt/data/files/Backups/paper"
+          PAPER_DATA_DIR="{{ paper_data_dir }}"
+          PAPER_PARENT="$(dirname "$PAPER_DATA_DIR")"
+          PAPER_LEAF="$(basename "$PAPER_DATA_DIR")"
           DATE=$(date +%d%m%Y-%H%M)  # european day-month-year-hour-minute
           SNAPSHOT="$BACKUP_DIR/paper-backup-$DATE.tar.gz"
 
           # Create compressed backup
-          tar -czf "$SNAPSHOT" -C /mnt/ssd/services paper
+          tar -czf "$SNAPSHOT" -C "$PAPER_PARENT" "$PAPER_LEAF"
 
           # Delete snapshots older than 30 days
           find "$BACKUP_DIR" -name 'paper-backup-*.tar.gz' -mtime +30 -delete

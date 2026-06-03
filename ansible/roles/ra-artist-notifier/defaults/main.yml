@@ -1,0 +1,29 @@
+---
+ra_artist_notifier_enabled: true
+
+ra_artist_notifier_app_dir: "/opt/ra-artist-notifier"
+ra_artist_notifier_config_dir: "/mnt/ssd/configs/ra-artist-notifier"
+ra_artist_notifier_state_file: "{{ ra_artist_notifier_config_dir }}/helena-hauff-state.json"
+ra_artist_notifier_env_file: "{{ ra_artist_notifier_config_dir }}/ra-artist-notifier.env"
+ra_artist_notifier_script_path: "{{ ra_artist_notifier_app_dir }}/ra_artist_notifier.py"
+ra_artist_notifier_service_name: "ra-artist-notifier"
+
+ra_artist_notifier_python_bin: "/usr/bin/python3"
+ra_artist_notifier_run_user: "ansible"
+ra_artist_notifier_run_group: "ansible"
+ra_artist_notifier_manage_packages: true
+ra_artist_notifier_python_packages:
+  - python3
+
+ra_artist_notifier_artist_name: "Helena Hauff"
+ra_artist_notifier_artist_url: "https://ra.co/dj/helenahauff"
+ra_artist_notifier_webhook_url: ""
+ra_artist_notifier_request_timeout_seconds: 20
+ra_artist_notifier_notify_first_run: false
+ra_artist_notifier_user_agent: "tresor-ra-artist-notifier/1.0 (+https://ra.co/dj/helenahauff)"
+ra_artist_notifier_discord_username: "RA Event Watcher"
+ra_artist_notifier_discord_avatar_url: ""
+
+# Twice daily by default. RA listings do not need a noisy polling interval.
+ra_artist_notifier_timer_on_calendar: "*-*-* 09,21:17:00"
+ra_artist_notifier_timer_randomized_delay_seconds: 1800

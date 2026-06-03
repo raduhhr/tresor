@@ -1,0 +1,22 @@
+---
+# Runs all useful offsite R2 service backups in sequence.
+# Prometheus is intentionally excluded:
+# - config is already repo-managed
+# - TSDB history is too large for this tarball-to-R2 pattern
+#
+# Stop/start cycles are handled inside each individual service playbook.
+
+- import_playbook: ../bday-notifier/backup-r2.yml
+- import_playbook: ../cloudflared/backup-r2.yml
+- import_playbook: ../content-notifier/backup-r2.yml
+- import_playbook: ../filebrowser/backup-r2.yml
+- import_playbook: ../filebrowser-public/backup-r2.yml
+- import_playbook: ../grafana/backup-r2.yml
+- import_playbook: ../jellyfin/backup-r2.yml
+- import_playbook: ../jellyfin-music/backup-r2.yml
+- import_playbook: ../kiwix/backup-r2.yml
+- import_playbook: ../satelite-watcher/backup-r2.yml
+- import_playbook: ../paper/backup-r2.yml
+- import_playbook: ../steam-free-notifier/backup-r2.yml
+- import_playbook: ../traefik/backup-r2.yml
+- import_playbook: ../uptime-kuma/backup-r2.yml

@@ -1,0 +1,15 @@
+---
+# Runs all service stop playbooks in sequence.
+
+- import_playbook: ../cloudflared/stop.yml
+- import_playbook: ../filebrowser/stop.yml
+- import_playbook: ../filebrowser-public/stop.yml
+- import_playbook: ../grafana/stop.yml
+- import_playbook: ../jellyfin/stop.yml
+- import_playbook: ../jellyfin-music/stop.yml
+- import_playbook: ../kiwix/stop.yml
+- import_playbook: ../satelite-watcher/stop.yml
+- import_playbook: ../paper/stop.yml
+- import_playbook: ../prometheus/stop.yml
+- import_playbook: ../traefik/stop.yml
+- import_playbook: ../uptime-kuma/stop.yml

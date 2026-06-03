@@ -1,0 +1,178 @@
+---
+- name: "Restore Satelite watcher - Phase 1: Validate backup"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_root_path: /opt/satelite-watcher
+    satelite_watcher_parent_dir: /opt
+    satelite_watcher_leaf_dir: satelite-watcher
+    satelite_watcher_backup_dir: /mnt/data/files/Backups/satelite-watcher
+    confirm_restore: "no"
+
+  tasks:
+    - name: Find latest backup when backup_file is not specified
+      ansible.builtin.shell: |
+        ls -1t {{ satelite_watcher_backup_dir }}/satelite-watcher-backup-*.tar.gz 2>/dev/null | head -1
+      register: _latest
+      changed_when: false
+      when: backup_file is not defined
+
+    - name: Set restore file path
+      ansible.builtin.set_fact:
+        _restore_file: "{{ backup_file | default(_latest.stdout | default('')) }}"
+
+    - name: Fail if no Satelite Watcher backup found
+      ansible.builtin.fail:
+        msg: >
+          No backup tarball found. Looked for:
+          {{ backup_file | default(satelite_watcher_backup_dir ~ '/satelite-watcher-backup-*.tar.gz') }}
+      when: _restore_file | length == 0
+
+    - name: Stat the Satelite Watcher backup file
+      ansible.builtin.stat:
+        path: "{{ _restore_file }}"
+      register: _backup_stat
+
+    - name: Fail if backup file does not exist
+      ansible.builtin.fail:
+        msg: "Backup file not found: {{ _restore_file }}"
+      when: not _backup_stat.stat.exists
+
+    - name: Preview tarball contents
+      ansible.builtin.shell: |
+        tar -tzf "{{ _restore_file }}" | head -20
+      register: _tar_list
+      changed_when: false
+
+    - name: Fail if tarball structure looks wrong
+      ansible.builtin.fail:
+        msg: >
+          Backup tarball does not contain expected {{ satelite_watcher_leaf_dir }}/ directory structure.
+          First entries: {{ _tar_list.stdout_lines[:5] }}
+      when: >
+        _tar_list.stdout_lines | select('match', '^' ~ satelite_watcher_leaf_dir ~ '/') | list | length == 0
+
+    - name: Confirm destructive restore
+      ansible.builtin.pause:
+        prompt: |
+          About to wipe {{ satelite_watcher_root_path }} and restore from:
+          {{ _restore_file }}
+
+          Type 'yes' to proceed
+      register: _confirm
+      when: confirm_restore | lower != 'yes'
+
+    - name: Abort if restore not confirmed
+      ansible.builtin.fail:
+        msg: "Satelite Watcher restore aborted by user."
+      when:
+        - confirm_restore | lower != 'yes'
+        - _confirm.user_input | default('') | lower != 'yes'
+
+    - name: Store restore path for following phases
+      ansible.builtin.set_fact:
+        _restore_file: "{{ _restore_file }}"
+        cacheable: true
+
+- name: "Restore Satelite watcher - Phase 2: Safety snapshot and teardown"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_root_path: /opt/satelite-watcher
+    satelite_watcher_parent_dir: /opt
+    satelite_watcher_leaf_dir: satelite-watcher
+    satelite_watcher_backup_dir: /mnt/data/files/Backups/satelite-watcher
+
+  tasks:
+    - name: Check if Satelite Watcher root exists
+      ansible.builtin.stat:
+        path: "{{ satelite_watcher_root_path }}"
+      register: _satelite_watcher_root
+
+    - name: Create pre-restore safety snapshot
+      ansible.builtin.shell: |
+        DATE=$(date +%d%m%Y-%H%M)
+        tar -czf "{{ satelite_watcher_backup_dir }}/pre-restore-satelite-watcher-backup-$DATE.tar.gz" \
+          -C "{{ satelite_watcher_parent_dir }}" "{{ satelite_watcher_leaf_dir }}"
+        echo "{{ satelite_watcher_backup_dir }}/pre-restore-satelite-watcher-backup-$DATE.tar.gz"
+      register: _safety_snap
+      when: _satelite_watcher_root.stat.exists | default(false)
+
+    - name: Stop Satelite Watcher timer
+      ansible.builtin.systemd:
+        name: satelite-watcher-schedule.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Stop Satelite watcher service
+      ansible.builtin.systemd:
+        name: satelite-watcher-schedule.service
+        state: stopped
+      failed_when: false
+
+    - name: Wipe Satelite Watcher root directory
+      ansible.builtin.file:
+        path: "{{ satelite_watcher_root_path }}"
+        state: absent
+      when: _satelite_watcher_root.stat.exists | default(false)
+
+    - name: Verify Satelite Watcher root directory is gone
+      ansible.builtin.stat:
+        path: "{{ satelite_watcher_root_path }}"
+      register: _wiped
+
+    - name: Confirm wipe succeeded
+      ansible.builtin.assert:
+        that: not _wiped.stat.exists
+        fail_msg: "Failed to wipe {{ satelite_watcher_root_path }} - aborting restore."
+
+- name: "Restore Satelite watcher - Phase 3: Extract backup"
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    satelite_watcher_root_path: /opt/satelite-watcher
+    satelite_watcher_parent_dir: /opt
+    satelite_watcher_user_name: satelite-watcher
+    satelite_watcher_group_name: satelite-watcher
+
+  tasks:
+    - name: Recreate parent directory
+      ansible.builtin.file:
+        path: "{{ satelite_watcher_parent_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Extract Satelite Watcher backup tarball
+      ansible.builtin.shell: |
+        tar -xzf "{{ _restore_file }}" -C "{{ satelite_watcher_parent_dir }}"
+
+    - name: Verify Satelite Watcher root directory was restored
+      ansible.builtin.stat:
+        path: "{{ satelite_watcher_root_path }}"
+      register: _restored_dir
+
+    - name: Fail if restore extraction failed
+      ansible.builtin.fail:
+        msg: "Extraction did not produce {{ satelite_watcher_root_path }}. Check the tarball."
+      when: not _restored_dir.stat.exists
+
+    - name: Fix ownership recursively
+      ansible.builtin.file:
+        path: "{{ satelite_watcher_root_path }}"
+        state: directory
+        owner: "{{ satelite_watcher_user_name }}"
+        group: "{{ satelite_watcher_group_name }}"
+        recurse: true
+
+- name: "Restore Satelite watcher - Phase 4: Redeploy"
+  import_playbook: deploy.yml
+
+- name: "Restore Satelite watcher - Phase 5: Verify"
+  import_playbook: status.yml

@@ -20,7 +20,7 @@ docker_ipv6: false
 docker_live_restore: true
 docker_cgroup_driver: systemd
 
-# Who can talk to the daemon (docker group). Do NOT add 'admin'.
+# Who can talk to the daemon (docker group). Do NOT add 'radu'.
 # Keep minimal — override in group_vars if needed (e.g., add 'admin' in prod)
 docker_group_members:
   - ansible

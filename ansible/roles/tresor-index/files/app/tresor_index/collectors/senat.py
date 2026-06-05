@@ -186,6 +186,13 @@ def _float_config(source: SourceConfig, key: str, default: float) -> float:
         return default
 
 
+def _vote_scope(source: SourceConfig) -> str:
+    value = str(source.config.get("vote_scope") or "").strip().lower()
+    if value in {"all", "substantive", "final"}:
+        return value
+    return "final" if bool(source.config.get("final_only", True)) else "all"
+
+
 def _int_value(value: str | None) -> int | None:
     text = _clean_text(value)
     if not text:
@@ -477,7 +484,29 @@ def _vote_kind(text: str) -> str:
         return "final_rejection"
     if "vot final" in normalized:
         return "final"
+    if "verificare prezenta" in normalized or "prezenta" == normalized:
+        return "presence_check"
+    if "amendament" in normalized:
+        return "amendment"
+    if "procedur" in normalized:
+        return "procedural"
     return "other"
+
+
+def _include_vote(vote: dict[str, Any], scope: str) -> bool:
+    if scope == "all":
+        return True
+    kind = str(vote.get("kind") or "")
+    if scope == "final":
+        return kind.startswith("final")
+    if kind in {"presence_check", "procedural"}:
+        return False
+    if kind.startswith("final") or kind == "amendment":
+        return True
+    if vote.get("bill"):
+        return True
+    outcome = _normalize_text(vote.get("outcome"))
+    return bool(outcome and outcome not in {"unknown"})
 
 
 def _outcome(value: str | None) -> str | None:
@@ -652,7 +681,7 @@ def fetch_senat_final_votes(source: SourceConfig) -> tuple[list[NormalizedItem],
     }
     encoding = str(source.config.get("html_encoding", "utf-8"))
     request_delay_seconds = max(0.0, _float_config(source, "request_delay_seconds", 0.3))
-    final_only = bool(source.config.get("final_only", True))
+    vote_scope = _vote_scope(source)
     max_votes = _int_config(source, "max_votes", 200)
     max_pages_per_day = max(1, _int_config(source, "max_pages_per_day", 5))
     max_month_steps = max(1, _int_config(source, "max_month_steps", 120))
@@ -759,7 +788,7 @@ def fetch_senat_final_votes(source: SourceConfig) -> tuple[list[NormalizedItem],
         if vote_id in seen_vote_ids:
             continue
         seen_vote_ids.add(vote_id)
-        if final_only and not str(vote["kind"]).startswith("final"):
+        if not _include_vote(vote, vote_scope):
             continue
         if len(items) >= max_votes:
             break
@@ -800,6 +829,7 @@ def fetch_senat_final_votes(source: SourceConfig) -> tuple[list[NormalizedItem],
                 "chamber": "Senat",
                 "kind": vote["kind"],
                 "outcome": vote["outcome"],
+                "scope": vote_scope,
             },
             "bill": vote["bill"],
             "counts": counts,

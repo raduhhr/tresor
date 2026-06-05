@@ -314,6 +314,25 @@ CREATE INDEX IF NOT EXISTS idx_parliament_vote_positions_vote_party_choice ON pa
 CREATE INDEX IF NOT EXISTS idx_parliament_vote_positions_party_vote ON parliament_vote_positions (party_normalized, vote_id);
 CREATE INDEX IF NOT EXISTS idx_parliament_vote_positions_politician_vote ON parliament_vote_positions (politician_key, vote_id);
 
+CREATE TABLE IF NOT EXISTS parliament_coverage_totals (
+    source_id text NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    chamber text NOT NULL,
+    year integer NOT NULL CHECK (year >= 1900),
+    scope text NOT NULL DEFAULT 'all',
+    official_votes integer NOT NULL DEFAULT 0,
+    official_unique_votes integer NOT NULL DEFAULT 0,
+    indexed_votes integer NOT NULL DEFAULT 0,
+    rejected_votes integer NOT NULL DEFAULT 0,
+    scan_status text NOT NULL DEFAULT 'unknown',
+    scanned_at timestamptz NOT NULL DEFAULT now(),
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    PRIMARY KEY (source_id, year, scope)
+);
+
+CREATE INDEX IF NOT EXISTS idx_parliament_coverage_totals_year ON parliament_coverage_totals (year, chamber);
+CREATE INDEX IF NOT EXISTS idx_parliament_coverage_totals_missing ON parliament_coverage_totals (source_id, year)
+WHERE indexed_votes < official_unique_votes;
+
 INSERT INTO schema_migrations (version)
 VALUES ('0001_initial_contract')
 ON CONFLICT (version) DO NOTHING;
@@ -336,6 +355,10 @@ ON CONFLICT (version) DO NOTHING;
 
 INSERT INTO schema_migrations (version)
 VALUES ('0006_civic_api_filters')
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO schema_migrations (version)
+VALUES ('0007_parliament_coverage_totals')
 ON CONFLICT (version) DO NOTHING;
 
 INSERT INTO schema_migrations (version)

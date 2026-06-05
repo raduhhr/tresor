@@ -240,6 +240,10 @@
       timeout: 5s
       retries: 10
       start_period: 20s
+    memory: "{{ (tresor_container_resource_limits | default({})).get('filebrowser', {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get('filebrowser', {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get('filebrowser', {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get('filebrowser', {}).pids_limit | default(omit) }}"
   tags: [filebrowser, filebrowser:run]
 
 # =====================

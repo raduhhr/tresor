@@ -50,9 +50,10 @@
     volumes:
       - "{{ kiwix_zim_dest_dir }}:/data:ro"
     networks: "{{ kiwix_networks | map('regex_replace', '^(.*)$', '{\"name\": \"\\1\"}') | map('from_yaml') | list }}"
-    memory: "2g"
-    cpus: 1.0
-    cpu_shares: 512
+    memory: "{{ (tresor_container_resource_limits | default({})).get(kiwix_container_name, {}).memory | default('2g') }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get(kiwix_container_name, {}).cpus | default(1.0) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get(kiwix_container_name, {}).cpu_shares | default(512) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get(kiwix_container_name, {}).pids_limit | default(omit) }}"
   become: true
 
 - name: Smoke test from tresor host

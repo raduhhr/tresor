@@ -71,6 +71,10 @@
       TZ: "{{ base_timezone | default('Europe/Bucharest') }}"
     volumes:
       - "{{ tresor_index_db_data_dir }}:/var/lib/postgresql/data"
+    memory: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_db_container_name, {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_db_container_name, {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_db_container_name, {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_db_container_name, {}).pids_limit | default(omit) }}"
     state: started
   no_log: true
 
@@ -223,6 +227,10 @@
       - -m
       - tresor_index.cli
       - scheduler
+    memory: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_scheduler_container_name, {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_scheduler_container_name, {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_scheduler_container_name, {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_scheduler_container_name, {}).pids_limit | default(omit) }}"
     state: started
 
 - name: Run Tresor Index public API container
@@ -246,6 +254,10 @@
       - "0.0.0.0"
       - --port
       - "{{ tresor_index_api_container_port | string }}"
+    memory: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_api_container_name, {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_api_container_name, {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_api_container_name, {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get(tresor_index_api_container_name, {}).pids_limit | default(omit) }}"
     state: started
   when: tresor_index_api_enabled | bool
 

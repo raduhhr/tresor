@@ -1,0 +1,130 @@
+---
+- name: Launch Tresor Index full civic coverage backfill
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    civic_full_coverage_years:
+      - 2016
+      - 2017
+      - 2018
+      - 2019
+      - 2020
+      - 2021
+      - 2022
+      - 2023
+      - 2024
+      - 2025
+      - 2026
+    civic_full_coverage_sources:
+      - cdep_final_votes
+      - senat_final_votes
+    civic_full_coverage_log_dir: /mnt/ssd/configs/tresor-index/logs
+    civic_full_coverage_sources_file: /tmp/sources-full-civic-coverage.yml
+
+  tasks:
+    - name: Launch full civic coverage backfill in background
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p "{{ civic_full_coverage_log_dir }}"
+        run_id="full-civic-coverage-$(date +%Y%m%d-%H%M%S)"
+        log="{{ civic_full_coverage_log_dir }}/${run_id}.log"
+        pidfile="{{ civic_full_coverage_log_dir }}/${run_id}.pid"
+        : > "$log"
+
+        nohup bash <<'BACKFILL' >> "$log" 2>&1 &
+        set -uo pipefail
+        errors=0
+
+        echo "=== $(date -Is) preparing temporary full-coverage source config ==="
+        docker exec -i tresor-index-scheduler python - <<'PY'
+        from pathlib import Path
+        import yaml
+
+        src = Path("/config/sources.yml")
+        dst = Path("{{ civic_full_coverage_sources_file }}")
+        payload = yaml.safe_load(src.read_text(encoding="utf-8")) or {}
+        for source in payload.get("sources", []):
+            if source.get("id") == "cdep_final_votes":
+                config = source.setdefault("config", {})
+                config["final_only"] = False
+                config["vote_scope"] = "all"
+                config["max_votes"] = 5000
+                config["request_delay_seconds"] = 0.5
+                config["verify_tls"] = False
+                config["xml_encoding"] = "iso-8859-2"
+                config["html_encoding"] = "iso-8859-2"
+            if source.get("id") == "senat_final_votes":
+                config = source.setdefault("config", {})
+                config["final_only"] = False
+                config["vote_scope"] = "all"
+                config["max_votes"] = 5000
+                config["max_pages_per_day"] = 20
+                config["max_month_steps"] = 180
+                config["request_delay_seconds"] = 0.8
+        dst.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        print(dst)
+        PY
+
+        echo "=== $(date -Is) verifying temporary civic source config ==="
+        docker exec -e TRESOR_INDEX_SOURCES_FILE={{ civic_full_coverage_sources_file }} tresor-index-scheduler \
+          python -m tresor_index.cli source list | grep -E '^(cdep_final_votes|senat_final_votes)' || errors=1
+
+        for source in {{ civic_full_coverage_sources | join(' ') }}; do
+          for year in {{ civic_full_coverage_years | join(' ') }}; do
+            from_date="${year}-01-01"
+            if [ "$year" = "$(date +%Y)" ]; then
+              to_date="$(date +%Y-%m-%d)"
+            else
+              to_date="${year}-12-31"
+            fi
+            echo "=== $(date -Is) starting ${source} ${from_date} -> ${to_date} ==="
+            if ! docker exec -e TRESOR_INDEX_SOURCES_FILE={{ civic_full_coverage_sources_file }} tresor-index-scheduler \
+              python -m tresor_index.cli civic backfill --source "$source" --from "$from_date" --to "$to_date" \
+              --batch-days 31 --max-votes 5000 --request-delay-seconds 0.8; then
+              echo "=== $(date -Is) ERROR ${source} ${from_date} -> ${to_date} ==="
+              errors=1
+            fi
+            echo "=== $(date -Is) finished ${source} ${from_date} -> ${to_date} ==="
+          done
+        done
+
+        echo "=== $(date -Is) refreshing civic API cache ==="
+        docker exec tresor-index-scheduler python -m tresor_index.cli civic cache refresh || errors=1
+
+        echo "=== $(date -Is) coverage by chamber/year ==="
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT chamber,
+               extract(year from vote_time)::int AS year,
+               count(*) AS votes,
+               count(DISTINCT bill_key) AS bills,
+               max(vote_time)::date AS latest_day
+        FROM parliament_votes
+        GROUP BY chamber, extract(year from vote_time)::int
+        ORDER BY chamber, year;
+        " || errors=1
+
+        echo "=== $(date -Is) recent civic fetch runs ==="
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+        SELECT source_id, status, started_at, finished_at, items_found, items_new, items_changed, left(COALESCE(error,''), 160) AS error
+        FROM fetch_runs
+        WHERE source_id IN ('cdep_final_votes', 'senat_final_votes')
+        ORDER BY started_at DESC
+        LIMIT 24;
+        " || errors=1
+
+        echo "=== $(date -Is) complete errors=${errors} ==="
+        exit "$errors"
+        BACKFILL
+
+        echo $! > "$pidfile"
+        printf 'run_id=%s\nlog=%s\npidfile=%s\npid=%s\n' "$run_id" "$log" "$pidfile" "$(cat "$pidfile")"
+      args:
+        executable: /bin/bash
+      register: civic_full_coverage_launch
+      changed_when: true
+
+    - name: Show launch details
+      ansible.builtin.debug:
+        var: civic_full_coverage_launch.stdout

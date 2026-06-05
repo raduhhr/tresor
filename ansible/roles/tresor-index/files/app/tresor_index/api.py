@@ -50,6 +50,11 @@ CIVIC_OVERVIEW_CACHE_KEY = "civic_overview"
 PARTY_LINE_CACHE_LIMIT = 500
 CIVIC_PARTIES_CACHE_PREFIX = "civic_parties"
 CIVIC_BILLS_CACHE_PREFIX = "civic_bills"
+TOPIC_SEARCH_EXPANSIONS = (
+    (("fiscal",), ("fiscal", "cod fiscal", "impozit", "impozite", "taxa", "taxe", "tva")),
+    (("penal",), ("penal", "cod penal", "infractiune", "infractiuni", "pedeapsa", "pedepse")),
+    (("salari", "salar"), ("salariu", "salarii", "salari", "salarizare", "salarial", "remunerare")),
+)
 
 
 @app.middleware("http")
@@ -160,6 +165,52 @@ def _has_time_sql(alias: str = "") -> str:
 
 def _normalize_bill_type(value: str) -> str:
     return "".join(char.lower() for char in value if char.isalnum())
+
+
+def _expanded_search_terms(value: str | None) -> list[str]:
+    normalized = _normalize_search_text(value)
+    if not normalized:
+        return []
+
+    terms = [normalized]
+    tokens = normalized.split()
+    if len(tokens) == 1:
+        token = tokens[0]
+        if len(token) >= 4:
+            for triggers, expansions in TOPIC_SEARCH_EXPANSIONS:
+                if any(token.startswith(trigger) or trigger.startswith(token) for trigger in triggers):
+                    terms.extend(expansions)
+
+    seen: set[str] = set()
+    unique_terms: list[str] = []
+    for term in terms:
+        clean = _normalize_search_text(term)
+        if clean and clean not in seen:
+            seen.add(clean)
+            unique_terms.append(clean)
+    return unique_terms
+
+
+def _search_patterns(value: str | None) -> list[str]:
+    return [f"%{term}%" for term in _expanded_search_terms(value)]
+
+
+def _compact_search_patterns(value: str | None) -> list[str]:
+    patterns: list[str] = []
+    seen: set[str] = set()
+    for term in _expanded_search_terms(value):
+        compact = _normalize_bill_type(term)
+        if compact and compact not in seen:
+            seen.add(compact)
+            patterns.append(f"%{compact}%")
+    return patterns
+
+
+def _ilike_any_sql(expr: str, patterns: list[str], params: list[Any]) -> str:
+    if not patterns:
+        return "FALSE"
+    params.extend(patterns)
+    return "(" + " OR ".join(f"{expr} ILIKE %s" for _ in patterns) + ")"
 
 
 def _year_bounds(year: int) -> tuple[datetime, datetime]:
@@ -295,21 +346,29 @@ def _vote_filters(
         clauses.append(_bill_type_sql("v") + " = %s")
         params.append(_normalize_bill_type(bill_type))
     if q:
-        normalized_q = _normalize_search_text(q)
+        normalized_patterns = _search_patterns(q)
         compact_q = _compact_search_text(q)
+        q_params: list[Any] = []
+        v_title_match = _ilike_any_sql(_search_sql('v.title'), normalized_patterns, q_params)
+        v_title_raw_match = _ilike_any_sql("v.title", [f"%{q}%"], q_params)
+        q_params.extend([f"%{compact_q}%", f"%{q}%"])
+        pb_title_match = _ilike_any_sql(_search_sql('pb.title'), normalized_patterns, q_params)
+        pb_stage_match = _ilike_any_sql(_search_sql('pb.stage'), normalized_patterns, q_params)
+        q_params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+        pbe_action_match = _ilike_any_sql(_search_sql('pbe.action'), normalized_patterns, q_params)
         clauses.append(
             f"""
             (
-                {_search_sql('v.title')} ILIKE %s
-                OR v.title ILIKE %s
+                {v_title_match}
+                OR {v_title_raw_match}
                 OR COALESCE(v.bill_code || v.bill_number::text || '/' || v.bill_year::text, '') ILIKE %s
                 OR COALESCE(v.bill_code || ' ' || v.bill_number::text || '/' || v.bill_year::text, '') ILIKE %s
                 OR EXISTS (
                     SELECT 1 FROM parliament_bills pb
                     WHERE pb.bill_key = {_bill_key_sql('v')}
                       AND (
-                        {_search_sql('pb.title')} ILIKE %s
-                        OR {_search_sql('pb.stage')} ILIKE %s
+                        {pb_title_match}
+                        OR {pb_stage_match}
                         OR pb.title ILIKE %s
                         OR COALESCE(pb.stage, '') ILIKE %s
                         OR pb.registration_numbers::text ILIKE %s
@@ -318,23 +377,12 @@ def _vote_filters(
                 OR EXISTS (
                     SELECT 1 FROM parliament_bill_events pbe
                     WHERE pbe.bill_key = {_bill_key_sql('v')}
-                      AND {_search_sql('pbe.action')} ILIKE %s
+                      AND {pbe_action_match}
                 )
             )
             """
         )
-        params.extend([
-            f"%{normalized_q}%",
-            f"%{q}%",
-            f"%{compact_q}%",
-            f"%{q}%",
-            f"%{normalized_q}%",
-            f"%{normalized_q}%",
-            f"%{q}%",
-            f"%{q}%",
-            f"%{q}%",
-            f"%{normalized_q}%",
-        ])
+        params.extend(q_params)
     if date_from:
         clauses.append("v.vote_time >= %s")
         params.append(datetime.combine(date_from, datetime.min.time()))
@@ -1867,38 +1915,36 @@ def build_civic_bills_payload(
         clauses.append(_bill_type_sql("v") + " = %s")
         params.append(_normalize_bill_type(bill_type))
     if q:
-        normalized_q = _normalize_search_text(q)
+        normalized_patterns = _search_patterns(q)
+        compact_patterns = _compact_search_patterns(q)
         compact_q = _compact_search_text(q)
+        q_params: list[Any] = []
+        v_title_match = _ilike_any_sql(_search_sql('v.title'), normalized_patterns, q_params)
+        pb_title_match = _ilike_any_sql(_search_sql('pb.title'), normalized_patterns, q_params)
+        q_params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+        initiative_match = _ilike_any_sql(_search_sql('pb.initiative_type'), normalized_patterns, q_params)
+        compact_v_title_match = _ilike_any_sql("regexp_replace(lower(coalesce(v.title, '')), '[^a-z0-9]+', '', 'g')", compact_patterns, q_params)
+        compact_pb_title_match = _ilike_any_sql("regexp_replace(lower(coalesce(pb.title, '')), '[^a-z0-9]+', '', 'g')", compact_patterns, q_params)
+        compact_initiative_match = _ilike_any_sql("regexp_replace(lower(coalesce(pb.initiative_type, '')), '[^a-z0-9]+', '', 'g')", compact_patterns, q_params)
+        q_params.extend([f"%{compact_q}%", f"%{q}%"])
         clauses.append(
             f"""
             (
-                {_search_sql('v.title')} ILIKE %s
-                OR {_search_sql('pb.title')} ILIKE %s
+                {v_title_match}
+                OR {pb_title_match}
                 OR v.title ILIKE %s
                 OR COALESCE(pb.title, '') ILIKE %s
                 OR pb.registration_numbers::text ILIKE %s
-                OR {_search_sql('pb.initiative_type')} ILIKE %s
-                OR regexp_replace(lower(coalesce(v.title, '')), '[^a-z0-9]+', '', 'g') ILIKE %s
-                OR regexp_replace(lower(coalesce(pb.title, '')), '[^a-z0-9]+', '', 'g') ILIKE %s
-                OR regexp_replace(lower(coalesce(pb.initiative_type, '')), '[^a-z0-9]+', '', 'g') ILIKE %s
+                OR {initiative_match}
+                OR {compact_v_title_match}
+                OR {compact_pb_title_match}
+                OR {compact_initiative_match}
                 OR v.bill_code || v.bill_number::text || '/' || v.bill_year::text ILIKE %s
                 OR v.bill_code || ' ' || v.bill_number::text || '/' || v.bill_year::text ILIKE %s
             )
             """
         )
-        params.extend([
-            f"%{normalized_q}%",
-            f"%{normalized_q}%",
-            f"%{q}%",
-            f"%{q}%",
-            f"%{q}%",
-            f"%{normalized_q}%",
-            f"%{_normalize_bill_type(q)}%",
-            f"%{_normalize_bill_type(q)}%",
-            f"%{_normalize_bill_type(q)}%",
-            f"%{compact_q}%",
-            f"%{q}%",
-        ])
+        params.extend(q_params)
     where = " AND ".join(clauses)
     final_filter_clauses: list[str] = []
     final_filter_params: list[Any] = []

@@ -110,6 +110,10 @@
         | ternary( [ "127.0.0.1:" ~ (cf.metrics_port | string) ~ ":" ~ (cf.metrics_port | string) ], [] )
       }}
     log_driver: "{{ cf.log_driver }}"
+    memory: "{{ (tresor_container_resource_limits | default({})).get(cf.name, {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get(cf.name, {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get(cf.name, {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get(cf.name, {}).pids_limit | default(omit) }}"
     state: started
   register: _cf_run
 

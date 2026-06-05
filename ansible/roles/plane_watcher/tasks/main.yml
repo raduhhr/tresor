@@ -180,4 +180,8 @@
       - /run:exec,size=256M
     device_cgroup_rules:
       - "c 189:* rwm"
+    memory: "{{ (tresor_container_resource_limits | default({})).get(plane_watcher_container_name, {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get(plane_watcher_container_name, {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get(plane_watcher_container_name, {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get(plane_watcher_container_name, {}).pids_limit | default(omit) }}"
     state: started

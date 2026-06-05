@@ -1,0 +1,46 @@
+---
+- name: Wait for the active full civic coverage run
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    civic_wait_log_dir: /mnt/ssd/configs/tresor-index/logs
+    civic_wait_pattern: full-civic-coverage-*.log
+
+  tasks:
+    - name: Wait for latest full civic coverage pid to exit
+      ansible.builtin.shell: |
+        set -euo pipefail
+        latest="$(ls -1t "{{ civic_wait_log_dir }}"/{{ civic_wait_pattern }} 2>/dev/null | head -n 1 || true)"
+        if [ -z "$latest" ]; then
+          echo "no full civic coverage log found"
+          exit 0
+        fi
+        pidfile="${latest%.log}.pid"
+        echo "watching log=${latest}"
+        echo "watching pidfile=${pidfile}"
+        if [ ! -f "$pidfile" ]; then
+          echo "pidfile missing; assuming no active run"
+          exit 0
+        fi
+        pid="$(cat "$pidfile")"
+        echo "watching pid=${pid}"
+        while kill -0 "$pid" 2>/dev/null; do
+          echo "still running pid=${pid} at $(date -Is)"
+          sleep 60
+        done
+        echo "run finished pid=${pid} at $(date -Is)"
+        echo "--- final full-run tail ---"
+        tail -n 80 "$latest"
+      args:
+        executable: /bin/bash
+      register: civic_wait_result
+
+    - name: Show wait result
+      ansible.builtin.debug:
+        var: civic_wait_result.stdout
+
+- import_playbook: deploy.yml
+
+- import_playbook: civic-post-coverage-pass.yml

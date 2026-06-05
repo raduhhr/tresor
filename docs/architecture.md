@@ -42,6 +42,20 @@ Grafana dashboards and the private API bridge used by vot-parlament.ro.
 
 ![Tresor Index runtime](assets/grafana-index-runtime.png)
 
+The newer civic lane adds coverage accounting for Camera Deputatilor and Senat
+final-vote sources. Coverage scans compare official yearly vote totals with the
+normalized database, store gaps in `parliament_coverage_totals`, and support
+strict validation before public-facing views are refreshed.
+
+## Observability And Alerts
+
+Grafana is managed as an operator surface rather than a loose dashboard folder.
+Dashboards are reconciled, datasources are kept private, and the latest private
+tree adds provisioned alerting rules for target outages, missing containers,
+restart storms, host pressure, disk pressure, and container cap pressure. A
+small optional relay can adapt Grafana webhook alerts for Discord mentions
+without publishing any webhook secret in this repo.
+
 ## Public Product Support
 
 The infrastructure now includes support for:
@@ -50,6 +64,7 @@ The infrastructure now includes support for:
 - BatchYT self-hosted update artifacts.
 - Plane watcher public site plumbing.
 - Scheduled satellite capture and operator tooling.
+- Static portfolio hosting through the VPS nginx edge.
 
 Those products may have their own closed or separate repositories; this repo
 documents the shared operations layer.

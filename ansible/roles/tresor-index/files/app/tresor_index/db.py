@@ -252,6 +252,182 @@ def refresh_parliament_politician_summaries() -> dict:
     return {"status": "refreshed", "summaries": row["summaries"] if row else 0}
 
 
+def upsert_parliament_coverage_total(
+    *,
+    source_id: str,
+    chamber: str,
+    year: int,
+    scope: str,
+    official_votes: int,
+    official_unique_votes: int,
+    indexed_votes: int,
+    rejected_votes: int,
+    scan_status: str,
+    metadata: dict,
+) -> None:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO parliament_coverage_totals (
+                    source_id, chamber, year, scope,
+                    official_votes, official_unique_votes, indexed_votes,
+                    rejected_votes, scan_status, scanned_at, metadata
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s::jsonb)
+                ON CONFLICT (source_id, year, scope) DO UPDATE SET
+                    chamber = EXCLUDED.chamber,
+                    official_votes = EXCLUDED.official_votes,
+                    official_unique_votes = EXCLUDED.official_unique_votes,
+                    indexed_votes = EXCLUDED.indexed_votes,
+                    rejected_votes = EXCLUDED.rejected_votes,
+                    scan_status = EXCLUDED.scan_status,
+                    scanned_at = EXCLUDED.scanned_at,
+                    metadata = EXCLUDED.metadata
+                """,
+                (
+                    source_id,
+                    chamber,
+                    year,
+                    scope,
+                    official_votes,
+                    official_unique_votes,
+                    indexed_votes,
+                    rejected_votes,
+                    scan_status,
+                    json.dumps(metadata, default=str),
+                ),
+            )
+        conn.commit()
+
+
+def parliament_indexed_vote_count(*, source_id: str, year: int) -> int:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT count(*) AS votes
+                FROM parliament_votes
+                WHERE source_id = %s
+                  AND vote_time >= make_date(%s, 1, 1)
+                  AND vote_time < make_date(%s + 1, 1, 1)
+                """,
+                (source_id, year, year),
+            )
+            row = cur.fetchone()
+    return int(row["votes"] if row else 0)
+
+
+def parliament_coverage_totals() -> list[dict]:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT source_id, chamber, year, scope,
+                       official_votes, official_unique_votes, indexed_votes,
+                       GREATEST(official_unique_votes - indexed_votes, 0) AS missing_votes,
+                       rejected_votes, scan_status, scanned_at, metadata
+                FROM parliament_coverage_totals
+                ORDER BY source_id, year, scope
+                """
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+def parliament_missing_coverage_rows() -> list[dict]:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT source_id, chamber, year, scope,
+                       official_unique_votes, indexed_votes,
+                       official_unique_votes - indexed_votes AS missing_votes,
+                       scan_status, scanned_at
+                FROM parliament_coverage_totals
+                WHERE indexed_votes < official_unique_votes
+                ORDER BY source_id, year, scope
+                """
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+def parliament_validation_report() -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH position_counts AS (
+                    SELECT
+                        vote_id,
+                        count(*) FILTER (WHERE vote_choice = 'yes') AS yes,
+                        count(*) FILTER (WHERE vote_choice = 'no') AS no,
+                        count(*) FILTER (WHERE vote_choice = 'abstain') AS abstain,
+                        count(*) FILTER (WHERE vote_choice = 'not_voted') AS not_voted,
+                        count(*) AS positions
+                    FROM parliament_vote_positions
+                    GROUP BY vote_id
+                )
+                SELECT
+                    (SELECT count(*) FROM parliament_votes) AS votes,
+                    (SELECT count(*) FROM parliament_vote_positions) AS positions,
+                    (SELECT count(*) FROM parliament_politicians) AS politicians,
+                    count(*) FILTER (WHERE pc.vote_id IS NULL) AS votes_without_positions,
+                    count(*) FILTER (
+                        WHERE pc.vote_id IS NOT NULL
+                          AND (
+                            COALESCE(v.yes_count, 0) <> pc.yes
+                            OR COALESCE(v.no_count, 0) <> pc.no
+                            OR COALESCE(v.abstain_count, 0) <> pc.abstain
+                            OR COALESCE(v.not_voted_count, 0) <> pc.not_voted
+                          )
+                    ) AS votes_with_count_mismatch
+                FROM parliament_votes v
+                LEFT JOIN position_counts pc ON pc.vote_id = v.vote_id
+                """
+            )
+            core = dict(cur.fetchone() or {})
+            cur.execute(
+                """
+                SELECT source_id, reason, count(*) AS rejected
+                FROM quarantine_items
+                WHERE source_id IN ('cdep_final_votes', 'senat_final_votes')
+                GROUP BY source_id, reason
+                ORDER BY source_id, rejected DESC, reason
+                """
+            )
+            quarantine = [dict(row) for row in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT p.politician_key, p.politician_name, count(*) AS positions
+                FROM parliament_vote_positions p
+                LEFT JOIN parliament_politicians pp ON pp.politician_key = p.politician_key
+                WHERE pp.politician_key IS NULL
+                GROUP BY p.politician_key, p.politician_name
+                ORDER BY positions DESC
+                LIMIT 50
+                """
+            )
+            missing_politicians = [dict(row) for row in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT source_id, chamber, year, scope,
+                       official_unique_votes, indexed_votes,
+                       official_unique_votes - indexed_votes AS missing_votes,
+                       scan_status, scanned_at
+                FROM parliament_coverage_totals
+                WHERE indexed_votes < official_unique_votes
+                ORDER BY source_id, year, scope
+                """
+            )
+            coverage_gaps = [dict(row) for row in cur.fetchall()]
+    return {
+        **core,
+        "quarantine": quarantine,
+        "positions_without_politician_rows": missing_politicians,
+        "coverage_gaps": coverage_gaps,
+    }
+
+
 def upsert_item_with_id(item: NormalizedItem) -> tuple[str, int]:
     digest = content_hash(item)
     now = datetime.now(timezone.utc)

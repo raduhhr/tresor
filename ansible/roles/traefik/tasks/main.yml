@@ -121,6 +121,10 @@
     command: ["--configFile=/traefik.yml"]
     published_ports: "{{ _published_ports }}"
     labels: "{{ _labels }}"
+    memory: "{{ (tresor_container_resource_limits | default({})).get('traefik', {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get('traefik', {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get('traefik', {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get('traefik', {}).pids_limit | default(omit) }}"
 
 # 3) Verify Traefik is healthy (inline status)
 - name: Fetch Traefik container info

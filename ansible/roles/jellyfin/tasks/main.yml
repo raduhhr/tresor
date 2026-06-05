@@ -217,6 +217,11 @@
     volumes: "{{ jellyfin_volumes }}"
     devices: "{{ jellyfin_devices }}"
     tty: false
+    memory: "{{ (tresor_container_resource_limits | default({})).get('jellyfin', {}).memory | default(omit) }}"
+    memory_swap: "{{ (tresor_container_resource_limits | default({})).get('jellyfin', {}).memory_swap | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get('jellyfin', {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get('jellyfin', {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get('jellyfin', {}).pids_limit | default(omit) }}"
     state: started
 
 - name: Find Jellyfin library options

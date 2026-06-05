@@ -13,7 +13,7 @@ grafana_config_dir: "/mnt/ssd/configs/grafana"
 grafana_data_dir: "/mnt/ssd/configs/grafana/data"
 
 grafana_port: 3000
-grafana_bind_addr: "192.0.2.10"
+grafana_bind_addr: "192.168.0.42"
 # Enable host publishing (LAN) by default for convenience
 grafana_expose_host_port: true
 grafana_host_port: 3000
@@ -38,6 +38,7 @@ grafana_cookie_secure: false
 grafana_cookie_samesite: "lax"
 
 grafana_install_plugins: []
+grafana_extra_hosts: []
 grafana_manage_dashboards: false
 grafana_dashboard_export_titles:
   - "Virtualization - Docker"
@@ -97,3 +98,130 @@ grafana_tresor_index_db_port: 5432
 grafana_tresor_index_db_name: "{{ tresor_index_db_name | default('tresor_index') }}"
 grafana_tresor_index_db_user: "{{ tresor_index_grafana_db_user | default('tresor_index_grafana') }}"
 grafana_tresor_index_db_password: "{{ tresor_index_grafana_db_password | default(vault_tresor_index_grafana_db_password | default(vault_tresor_index_db_password | default('tresor_index_local_only_change_me'))) }}"
+
+# Grafana Alerting -> Discord.
+# Set grafana_alerting_discord_webhook_url from vault/group_vars to enable.
+grafana_alerting_enabled: "{{ (grafana_alerting_discord_webhook_url | default('') | string | length) > 0 }}"
+grafana_alerting_manage_notification_policy: true
+grafana_alerting_file: "{{ grafana_config_dir }}/provisioning/alerting/tresor-infra-alerts.yml"
+grafana_alerting_contact_point_name: "Tresor Guardian"
+grafana_alerting_contact_point_uid: "tresor-guardian-webhook"
+grafana_alerting_discord_webhook_url: ""
+grafana_alerting_discord_mention: ""
+grafana_alerting_discord_user_id: ""
+grafana_alerting_discord_use_webhook_username: false
+grafana_alerting_relay_enabled: "{{ grafana_alerting_discord_user_id | default('') | string | length > 0 }}"
+grafana_alerting_relay_container_name: "grafana-discord-relay"
+grafana_alerting_relay_internal_alias: "grafana-discord-relay-internal"
+grafana_alerting_relay_image: "python:3.13-alpine"
+grafana_alerting_relay_bind_addr: "0.0.0.0"
+grafana_alerting_relay_connect_addr: "{{ grafana_alerting_relay_internal_alias }}"
+grafana_alerting_relay_port: 3101
+grafana_alerting_relay_token: "{{ vault_grafana_alerting_relay_token | default('tresor-guardian') }}"
+grafana_alerting_relay_dir: "{{ grafana_config_dir }}/discord-relay"
+grafana_alerting_relay_env_file: "/etc/tresor-grafana-discord-relay.env"
+grafana_alerting_relay_service_name: "tresor-grafana-discord-relay"
+grafana_alerting_relay_url: "http://{{ grafana_alerting_relay_connect_addr }}:{{ grafana_alerting_relay_port }}/{{ grafana_alerting_relay_token }}"
+grafana_alerting_group_name: "tresor-guardian-1m"
+grafana_alerting_folder: "Tresor"
+grafana_alerting_route_label: "tresor"
+grafana_alerting_group_wait: "30s"
+grafana_alerting_group_interval: "5m"
+grafana_alerting_repeat_interval: "4h"
+grafana_alerting_evaluation_interval: "1m"
+
+grafana_alerting_container_names:
+  - cadvisor
+  - cloudflared
+  - filebrowser
+  - filebrowser-public
+  - grafana
+  - jellyfin
+  - jellyfin-music
+  - kiwix
+  - node-exporter
+  - paper
+  - plane-watcher
+  - prometheus
+  - traefik
+  - tresor-index-api
+  - tresor-index-db
+  - tresor-index-scheduler
+  - uptime-kuma
+grafana_alerting_container_name_regex: "{{ grafana_alerting_container_names | join('|') }}"
+
+grafana_alerting_rules:
+  - uid: "tresor-target-down"
+    title: "Tresor monitoring target down"
+    expr: 'up{job=~"prometheus|node|cadvisor|tresor-index-api"} == 0'
+    threshold: 0
+    evaluator: gt
+    for: "2m"
+    severity: critical
+    summary: "Prometheus cannot scrape a core Tresor target."
+    description: "Prometheus, node-exporter, cAdvisor, or Tresor Index metrics have been unreachable for more than 2 minutes."
+  - uid: "tresor-container-down"
+    title: "Tresor managed container missing"
+    expr: 'time() - max by (name) (container_last_seen{name=~"{{ grafana_alerting_container_name_regex }}",image!=""}) > 120'
+    threshold: 0
+    evaluator: gt
+    for: "2m"
+    severity: critical
+    summary: "A managed Tresor container has not been seen by cAdvisor for more than 2 minutes."
+    description: "This usually means the container is stopped, wedged, or cAdvisor lost visibility."
+  - uid: "tresor-container-restart-storm"
+    title: "Tresor container restart storm"
+    expr: 'changes(container_start_time_seconds{name=~"{{ grafana_alerting_container_name_regex }}",image!=""}[5m]) > 3'
+    threshold: 0
+    evaluator: gt
+    for: "0s"
+    severity: critical
+    summary: "A managed Tresor container restarted more than 3 times in 5 minutes."
+    description: "This is likely a crash loop, OOM kill loop, bad deploy, or host-level disruption."
+  - uid: "tresor-host-memory-pressure"
+    title: "Tresor host RAM pressure"
+    expr: '100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 75'
+    threshold: 0
+    evaluator: gt
+    for: "15m"
+    severity: critical
+    summary: "Tresor host RAM pressure has been above 75 percent for 15 minutes."
+    description: "This uses MemAvailable, so filesystem cache is discounted; sustained pressure means the host is genuinely running low on available RAM."
+  - uid: "tresor-host-cpu-pressure"
+    title: "Tresor host CPU above 80% for 10 mins"
+    expr: '100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 80'
+    threshold: 0
+    evaluator: gt
+    for: "10m"
+    severity: critical
+    summary: "Tresor host CPU has been above 80 percent for 10 minutes."
+    description: "Sustained whole-host CPU pressure can starve all containers even when Jellyfin is capped."
+  - uid: "tresor-host-disk-low"
+    title: "Tresor host disk low"
+    expr: '10 - (100 * (node_filesystem_avail_bytes{mountpoint=~"/|/mnt/ssd|/mnt/data",fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{mountpoint=~"/|/mnt/ssd|/mnt/data",fstype!~"tmpfs|overlay|squashfs"})) > 0'
+    threshold: 0
+    evaluator: gt
+    for: "5m"
+    severity: critical
+    summary: "A critical Tresor filesystem has less than 10 percent free space."
+    description: "Root, SSD config/container storage, or data storage is close to full."
+  - uid: "tresor-container-memory-limit-pressure"
+    title: "Container running close to memory cap"
+    expr: '(100 * max by (name) (container_memory_working_set_bytes{name=~"{{ grafana_alerting_container_name_regex }}",image!=""}) / max by (name) (container_spec_memory_limit_bytes{name=~"{{ grafana_alerting_container_name_regex }}",image!=""}) > 90) and on(name) max by (name) (container_spec_memory_limit_bytes{name=~"{{ grafana_alerting_container_name_regex }}",image!=""}) > 0 and on(name) max by (name) (container_spec_memory_limit_bytes{name=~"{{ grafana_alerting_container_name_regex }}",image!=""}) < 1000000000000000'
+    threshold: 0
+    evaluator: gt
+    for: "15m"
+    severity: critical
+    summary: "A managed Tresor container has been above 90 percent of its Docker memory cap for 15 minutes."
+    description: "The container is running close to its configured Docker memory hardcap."
+  - uid: "tresor-container-cpu-limit-pressure"
+    title: "Jellyfin running at 5.6 CPU hardcap (70% host) for 1 min"
+    expr: '(100 * sum by (name) (rate(container_cpu_usage_seconds_total{name=~"jellyfin|jellyfin-music",image!=""}[1m])) / max by (name) (container_spec_cpu_quota{name=~"jellyfin|jellyfin-music",image!=""} / container_spec_cpu_period{name=~"jellyfin|jellyfin-music",image!=""}) > 95) and on(name) max by (name) (container_spec_cpu_quota{name=~"jellyfin|jellyfin-music",image!=""}) > 0'
+    threshold: 0
+    evaluator: gt
+    for: "1m"
+    severity: critical
+    summary: "A Jellyfin container has been pinned against its 5.6 CPU Docker hardcap for more than 1 minute."
+    description: "Both Jellyfin containers are capped at 5.6 CPUs, which is 70 percent of the 8-core Tresor host. This usually means browser/software transcodes are saturating the protected CPU budget; direct play should remain unaffected."
+    hardcap: "5.6 CPU (70% of the 8-core host)"
+    sustained_for: "1 min"

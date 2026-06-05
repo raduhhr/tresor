@@ -89,6 +89,123 @@
   loop: "{{ _grafana_legacy_dashboard_json_files.files }}"
   when: grafana_manage_dashboards | bool
 
+- name: Render Grafana alerting provisioning
+  ansible.builtin.template:
+    src: alerting.yml.j2
+    dest: "{{ grafana_alerting_file }}"
+    owner: "472"
+    group: "472"
+    mode: "0600"
+  register: _grafana_alerting_provisioning
+  no_log: true
+  when: grafana_alerting_enabled | bool
+
+- name: Remove Grafana alerting provisioning when disabled
+  ansible.builtin.file:
+    path: "{{ grafana_alerting_file }}"
+    state: absent
+  register: _grafana_alerting_provisioning_absent
+  when: not (grafana_alerting_enabled | bool)
+
+- name: Ensure Grafana Discord alert relay directory exists
+  ansible.builtin.file:
+    path: "{{ grafana_alerting_relay_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  when:
+    - grafana_alerting_enabled | bool
+    - grafana_alerting_relay_enabled | bool
+
+- name: Install Grafana Discord alert relay
+  ansible.builtin.copy:
+    src: discord_alert_relay.py
+    dest: "{{ grafana_alerting_relay_dir }}/discord_alert_relay.py"
+    owner: root
+    group: root
+    mode: "0750"
+  register: _grafana_alerting_relay_script
+  when:
+    - grafana_alerting_enabled | bool
+    - grafana_alerting_relay_enabled | bool
+
+- name: Render Grafana Discord alert relay environment
+  ansible.builtin.template:
+    src: discord-alert-relay.env.j2
+    dest: "{{ grafana_alerting_relay_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  register: _grafana_alerting_relay_env
+  no_log: true
+  when:
+    - grafana_alerting_enabled | bool
+    - grafana_alerting_relay_enabled | bool
+
+- name: Build Grafana Discord alert relay networks list
+  ansible.builtin.set_fact:
+    _grafana_alerting_relay_networks_list:
+      - name: "lan_pub"
+      - name: "internal_net"
+        aliases:
+          - "{{ grafana_alerting_relay_internal_alias }}"
+  when:
+    - grafana_alerting_enabled | bool
+    - grafana_alerting_relay_enabled | bool
+
+- name: Stop legacy host Grafana Discord alert relay
+  ansible.builtin.systemd:
+    name: "{{ grafana_alerting_relay_service_name }}"
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  failed_when: false
+  when:
+    - grafana_alerting_enabled | bool
+    - grafana_alerting_relay_enabled | bool
+
+- name: Run Grafana Discord alert relay container
+  community.docker.docker_container:
+    name: "{{ grafana_alerting_relay_container_name }}"
+    image: "{{ grafana_alerting_relay_image }}"
+    pull: true
+    recreate: "{{ (_grafana_alerting_relay_script is defined and _grafana_alerting_relay_script is changed) or (_grafana_alerting_relay_env is defined and _grafana_alerting_relay_env is changed) }}"
+    restart_policy: unless-stopped
+    comparisons:
+      networks: strict
+    networks: "{{ _grafana_alerting_relay_networks_list }}"
+    command: "python /app/discord_alert_relay.py"
+    env:
+      DISCORD_WEBHOOK_URL: "{{ grafana_alerting_discord_webhook_url }}"
+      DISCORD_USER_ID: "{{ grafana_alerting_discord_user_id }}"
+      RELAY_TOKEN: "{{ grafana_alerting_relay_token }}"
+      LISTEN_HOST: "{{ grafana_alerting_relay_bind_addr }}"
+      LISTEN_PORT: "{{ grafana_alerting_relay_port | string }}"
+      DISCORD_USERNAME: "{{ grafana_alerting_contact_point_name }}"
+    volumes:
+      - "{{ grafana_alerting_relay_dir }}/discord_alert_relay.py:/app/discord_alert_relay.py:ro"
+    state: started
+  no_log: true
+  when:
+    - grafana_alerting_enabled | bool
+    - grafana_alerting_relay_enabled | bool
+
+- name: Disable Grafana Discord alert relay when unused
+  ansible.builtin.systemd:
+    name: "{{ grafana_alerting_relay_service_name }}"
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  failed_when: false
+  when: not (grafana_alerting_enabled | bool and grafana_alerting_relay_enabled | bool)
+
+- name: Remove Grafana Discord alert relay container when unused
+  community.docker.docker_container:
+    name: "{{ grafana_alerting_relay_container_name }}"
+    state: absent
+  when: not (grafana_alerting_enabled | bool and grafana_alerting_relay_enabled | bool)
+
 - name: Build Grafana environment variables
   ansible.builtin.set_fact:
     _grafana_env:
@@ -134,6 +251,10 @@
   ansible.builtin.set_fact:
     _grafana_ports: "{{ [grafana_bind_addr ~ ':' ~ grafana_host_port ~ ':' ~ grafana_port] if grafana_expose_host_port else [] }}"
 
+- name: Resolve Grafana resource limits
+  ansible.builtin.set_fact:
+    _grafana_resource_limits: "{{ (tresor_container_resource_limits | default({})).get(grafana_container_name, {}) }}"
+
 - name: Run Grafana container
   community.docker.docker_container:
     name: "{{ grafana_container_name }}"
@@ -144,12 +265,17 @@
       networks: strict
     ports: "{{ _grafana_ports }}"
     networks: "{{ _grafana_networks_list }}"
+    etc_hosts: "{{ grafana_extra_hosts }}"
     labels: "{{ _grafana_labels }}"
     env: "{{ _grafana_env }}"
     volumes:
       - "{{ grafana_config_dir }}/provisioning:/etc/grafana/provisioning:ro"
       - "{{ grafana_data_dir }}:/var/lib/grafana"
     user: "{{ grafana_user }}"
+    memory: "{{ _grafana_resource_limits.memory | default(omit) }}"
+    cpus: "{{ _grafana_resource_limits.cpus | default(omit) }}"
+    cpu_shares: "{{ _grafana_resource_limits.cpu_shares | default(omit) }}"
+    pids_limit: "{{ _grafana_resource_limits.pids_limit | default(omit) }}"
     state: started
 
 - name: Wait for Grafana container to be running
@@ -162,6 +288,30 @@
     - _container_info.exists
     - _container_info.container.State.Running
   changed_when: false
+
+- name: Wait for Grafana HTTP API to be ready
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/health"
+    method: GET
+    status_code: 200
+  register: _grafana_health
+  retries: 30
+  delay: 2
+  until: _grafana_health.status == 200
+  changed_when: false
+
+- name: Reload Grafana alerting provisioning
+  ansible.builtin.uri:
+    url: "http://{{ grafana_bind_addr }}:{{ grafana_host_port }}/api/admin/provisioning/alerting/reload"
+    method: POST
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  no_log: true
+  when: >-
+    (_grafana_alerting_provisioning is defined and _grafana_alerting_provisioning is changed)
+    or (_grafana_alerting_provisioning_absent is defined and _grafana_alerting_provisioning_absent is changed)
 
 - name: Reconcile Grafana datasource and dashboards via API
   ansible.builtin.include_tasks: sync_api.yml
@@ -176,3 +326,4 @@
       - "Networks: {{ _container_info.container.NetworkSettings.Networks.keys() | list | join(', ') }}"
       - "Traefik: {{ 'enabled' if grafana_enable_traefik else 'disabled (LAN-only)' }}"
       - "Datasources: Prometheus, Tresor Index Postgres (auto-managed via API)"
+      - "Alerting: {{ 'Discord contact point + Tresor infra rules enabled' if grafana_alerting_enabled else 'disabled (set grafana_alerting_discord_webhook_url)' }}"

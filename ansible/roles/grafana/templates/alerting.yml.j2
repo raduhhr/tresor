@@ -1,0 +1,161 @@
+apiVersion: 1
+
+deleteContactPoints:
+  - orgId: 1
+    uid: tresor-guardian-discord
+
+{% if grafana_alerting_manage_notification_policy | bool %}
+policies:
+  - orgId: 1
+    receiver: {{ grafana_alerting_contact_point_name | to_json }}
+    group_by:
+      - grafana_folder
+      - alertname
+    group_wait: {{ grafana_alerting_group_wait }}
+    group_interval: {{ grafana_alerting_group_interval }}
+    repeat_interval: {{ grafana_alerting_repeat_interval }}
+    routes:
+      - receiver: {{ grafana_alerting_contact_point_name | to_json }}
+        object_matchers:
+          - [tresor_route, "=", {{ grafana_alerting_route_label | to_json }}]
+        group_by:
+          - grafana_folder
+          - alertname
+        group_wait: {{ grafana_alerting_group_wait }}
+        group_interval: {{ grafana_alerting_group_interval }}
+        repeat_interval: {{ grafana_alerting_repeat_interval }}
+{% endif %}
+
+contactPoints:
+  - orgId: 1
+    name: {{ grafana_alerting_contact_point_name | to_json }}
+    receivers:
+      - uid: {{ grafana_alerting_contact_point_uid | to_json }}
+{% if grafana_alerting_relay_enabled | bool %}
+        type: webhook
+        disableResolveMessage: false
+        settings:
+          httpMethod: POST
+          url: {{ grafana_alerting_relay_url | to_json }}
+{% else %}
+        type: discord
+        disableResolveMessage: false
+        settings:
+          content: |-
+            {{ grafana_alerting_discord_mention | default('') }}
+            {{ '{{ template "tresor.discord.content" . }}' }}
+          use_discord_username: {{ grafana_alerting_discord_use_webhook_username | bool | tojson }}
+          url: {{ grafana_alerting_discord_webhook_url | to_json }}
+{% endif %}
+
+templates:
+  - orgId: 1
+    name: tresor.discord.content
+    template: |-
+{% raw %}
+      {{ define "tresor.discord.content" -}}
+      {{ if eq .Status "firing" }}**TRESOR ALERT**{{ else }}**TRESOR RESOLVED**{{ end }} - {{ len .Alerts.Firing }} firing / {{ len .Alerts.Resolved }} resolved
+      {{ range .Alerts.Firing -}}
+      - {{ .Labels.alertname }}{{ if .Labels.name }} (`{{ .Labels.name }}`){{ end }}: {{ .Annotations.summary }}
+      {{ end -}}
+      {{ range .Alerts.Resolved -}}
+      - resolved: {{ .Labels.alertname }}{{ if .Labels.name }} (`{{ .Labels.name }}`){{ end }}
+      {{ end -}}
+      {{ end }}
+{% endraw %}
+
+groups:
+  - orgId: 1
+    name: {{ grafana_alerting_group_name | to_json }}
+    folder: {{ grafana_alerting_folder | to_json }}
+    interval: {{ grafana_alerting_evaluation_interval }}
+    rules:
+{% for rule in grafana_alerting_rules %}
+      - uid: {{ rule.uid | to_json }}
+        title: {{ rule.title | to_json }}
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              editorMode: code
+              expr: {{ rule.expr | to_json }}
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - {{ rule.threshold }}
+                    type: {{ rule.evaluator | default('gt') }}
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: {{ rule.no_data_state | default('OK') }}
+        execErrState: {{ rule.exec_err_state | default('Error') }}
+        for: {{ rule.for | default('5m') }}
+        annotations:
+          summary: {{ rule.summary | to_json }}
+          description: {{ rule.description | to_json }}
+{% if rule.hardcap is defined %}
+          hardcap: {{ rule.hardcap | to_json }}
+{% endif %}
+{% if rule.sustained_for is defined %}
+          sustained_for: {{ rule.sustained_for | to_json }}
+{% endif %}
+        labels:
+          severity: {{ rule.severity | to_json }}
+          tresor_route: {{ grafana_alerting_route_label | to_json }}
+        isPaused: false
+{% endfor %}

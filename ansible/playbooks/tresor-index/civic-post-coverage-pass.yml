@@ -1,0 +1,156 @@
+---
+- name: Launch Tresor Index post-run civic coverage pass
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    civic_post_coverage_from_year: 2016
+    civic_post_coverage_to_year: 2026
+    civic_post_coverage_log_dir: /mnt/ssd/configs/tresor-index/logs
+    civic_post_coverage_sources_file: /tmp/sources-post-civic-coverage.yml
+    civic_post_coverage_max_passes: 5
+
+  tasks:
+    - name: Launch post coverage scanner and missing backfills in background
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p "{{ civic_post_coverage_log_dir }}"
+        run_id="post-civic-coverage-$(date +%Y%m%d-%H%M%S)"
+        log="{{ civic_post_coverage_log_dir }}/${run_id}.log"
+        pidfile="{{ civic_post_coverage_log_dir }}/${run_id}.pid"
+        : > "$log"
+
+        nohup bash <<'POSTCOVERAGE' >> "$log" 2>&1 &
+        set -uo pipefail
+        errors=0
+        sources_file="{{ civic_post_coverage_sources_file }}"
+
+        echo "=== $(date -Is) preparing post-coverage source config ==="
+        docker exec -i tresor-index-scheduler python - <<'PY'
+        from pathlib import Path
+        import yaml
+
+        src = Path("/config/sources.yml")
+        dst = Path("{{ civic_post_coverage_sources_file }}")
+        payload = yaml.safe_load(src.read_text(encoding="utf-8")) or {}
+        for source in payload.get("sources", []):
+            if source.get("id") == "cdep_final_votes":
+                config = source.setdefault("config", {})
+                config["final_only"] = False
+                config["vote_scope"] = "all"
+                config["max_votes"] = 5000
+                config["request_delay_seconds"] = 0.8
+                config["verify_tls"] = False
+                config["xml_encoding"] = "iso-8859-2"
+                config["html_encoding"] = "iso-8859-2"
+            if source.get("id") == "senat_final_votes":
+                config = source.setdefault("config", {})
+                config["final_only"] = False
+                config["vote_scope"] = "all"
+                config["max_votes"] = 5000
+                config["max_pages_per_day"] = 20
+                config["max_month_steps"] = 180
+                config["request_delay_seconds"] = 0.8
+        dst.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        print(dst)
+        PY
+
+        echo "=== $(date -Is) applying migrations and syncing sources ==="
+        docker exec tresor-index-scheduler python -m tresor_index.cli migrate || errors=1
+        docker exec tresor-index-scheduler python -m tresor_index.cli source sync || errors=1
+
+        echo "=== $(date -Is) official coverage scan ==="
+        docker exec -e TRESOR_INDEX_SOURCES_FILE="$sources_file" tresor-index-scheduler \
+          python -m tresor_index.cli civic coverage scan \
+            --source all \
+            --from-year {{ civic_post_coverage_from_year }} \
+            --to-year {{ civic_post_coverage_to_year }} \
+            --scope all \
+            --batch-days 31 \
+            --max-votes 5000 \
+            --request-delay-seconds 0.8 \
+            --store || errors=1
+
+        for pass in $(seq 1 {{ civic_post_coverage_max_passes }}); do
+          echo "=== $(date -Is) missing coverage pass ${pass} ==="
+          missing="$(docker exec tresor-index-db psql -U tresor_index -d tresor_index -At -F '|' -c "
+            SELECT source_id, year
+            FROM parliament_coverage_totals
+            WHERE scope = 'all'
+              AND indexed_votes < official_unique_votes
+            ORDER BY source_id, year;
+          " || true)"
+
+          if [ -z "$missing" ]; then
+            echo "=== $(date -Is) no missing coverage rows ==="
+            break
+          fi
+
+          while IFS='|' read -r source year; do
+            [ -n "$source" ] || continue
+            if [ "$year" = "$(date +%Y)" ]; then
+              to_date="$(date +%Y-%m-%d)"
+            else
+              to_date="${year}-12-31"
+            fi
+            echo "=== $(date -Is) rebackfill ${source} ${year}-01-01 -> ${to_date} ==="
+            docker exec -e TRESOR_INDEX_SOURCES_FILE="$sources_file" tresor-index-scheduler \
+              python -m tresor_index.cli civic backfill \
+                --source "$source" \
+                --from "${year}-01-01" \
+                --to "$to_date" \
+                --batch-days 31 \
+                --max-votes 5000 \
+                --request-delay-seconds 0.8 || errors=1
+
+            echo "=== $(date -Is) rescan ${source} ${year} ==="
+            docker exec -e TRESOR_INDEX_SOURCES_FILE="$sources_file" tresor-index-scheduler \
+              python -m tresor_index.cli civic coverage scan \
+                --source "$source" \
+                --from-year "$year" \
+                --to-year "$year" \
+                --scope all \
+                --batch-days 31 \
+                --max-votes 5000 \
+                --request-delay-seconds 0.8 \
+                --store || errors=1
+          done <<< "$missing"
+        done
+
+        echo "=== $(date -Is) stored coverage totals ==="
+        docker exec tresor-index-scheduler python -m tresor_index.cli civic coverage status || errors=1
+
+        echo "=== $(date -Is) validation report ==="
+        docker exec tresor-index-scheduler python -m tresor_index.cli civic coverage validate || errors=1
+
+        echo "=== $(date -Is) refreshing civic API cache ==="
+        docker exec tresor-index-scheduler python -m tresor_index.cli civic cache refresh || errors=1
+
+        echo "=== $(date -Is) remaining coverage gaps ==="
+        docker exec tresor-index-db psql -U tresor_index -d tresor_index -c "
+          SELECT source_id, chamber, year, scope,
+                 official_unique_votes, indexed_votes,
+                 official_unique_votes - indexed_votes AS missing_votes,
+                 scan_status, scanned_at
+          FROM parliament_coverage_totals
+          WHERE indexed_votes < official_unique_votes
+          ORDER BY source_id, year;
+        " || errors=1
+
+        echo "=== $(date -Is) complete errors=${errors} ==="
+        exit "$errors"
+        POSTCOVERAGE
+
+        echo $! > "$pidfile"
+        echo "launched ${run_id}"
+        echo "log=${log}"
+        echo "pidfile=${pidfile}"
+        echo "pid=$(cat "$pidfile")"
+      args:
+        executable: /bin/bash
+      register: civic_post_coverage_launch
+
+    - name: Show post coverage launch
+      ansible.builtin.debug:
+        var: civic_post_coverage_launch.stdout

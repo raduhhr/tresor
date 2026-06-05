@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820" role="img">
+  <defs>
+    <marker id="arrow-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2A5A7A"/>
+    </marker>
+    <style>
+      .bg { fill: #E8DCC4; }
+      .title { fill: #0F0F0F; font: 700 34px "JetBrains Mono", "Cascadia Mono", monospace; }
+      .subtitle { fill: #4A4A4A; font: 500 15px "JetBrains Mono", "Cascadia Mono", monospace; letter-spacing: .3px; }
+      .section { fill: #2A5A7A; font: 700 15px "JetBrains Mono", "Cascadia Mono", monospace; letter-spacing: .6px; text-transform: uppercase; }
+      .panel { fill: #F2EBD9; stroke: #BFB090; stroke-width: 2; rx: 8; }
+      .panel-accent { fill: #F2EBD9; stroke: #2A5A7A; stroke-width: 3; rx: 8; }
+      .node { fill: #F2EBD9; stroke: #2A5A7A; stroke-width: 2; rx: 8; }
+      .node2 { fill: #F2EBD9; stroke: #2AA198; stroke-width: 2; rx: 8; }
+      .node3 { fill: #F2EBD9; stroke: #CB4B16; stroke-width: 2; rx: 8; }
+      .label { fill: #0F0F0F; font: 700 18px "JetBrains Mono", "Cascadia Mono", monospace; }
+      .small { fill: #4A4A4A; font: 500 13px "JetBrains Mono", "Cascadia Mono", monospace; }
+      .tiny { fill: #4A4A4A; font: 500 11px "JetBrains Mono", "Cascadia Mono", monospace; }
+      .ok { fill: #2AA198; font: 700 14px "JetBrains Mono", "Cascadia Mono", monospace; }
+      .warn { fill: #DC322F; font: 700 14px "JetBrains Mono", "Cascadia Mono", monospace; }
+      .accent { fill: #2A5A7A; font: 700 14px "JetBrains Mono", "Cascadia Mono", monospace; }
+      .arrow { fill: none; stroke: #2A5A7A; stroke-width: 3; marker-end: url(#arrow-light); }
+      .dash { fill: none; stroke: #BFB090; stroke-width: 2; stroke-dasharray: 8 9; }
+      .footer { fill: #F2EBD9; stroke: #BFB090; stroke-width: 2; }
+    </style>
+  </defs>
+  <rect class="bg" width="1400" height="820"/>
+  <text class="title" x="36" y="58">BatchYT Downloader // release + update pipeline</text>
+  <text class="subtitle" x="36" y="88">Tag-driven GitHub Actions release, installer manifest, restricted VPS promotion, SHA256-verified updater</text>
+  
+      <text class="section" x="48" y="136">GitHub Release Path</text>
+      <rect class="node" x="56" y="166" width="210" height="96"/>
+  <text class="label" x="74" y="199">v-tag push</text>
+  <text class="small" x="74" y="224">tag must match VERSION</text>
+<text class="small" x="74" y="242">pushes run sanity compile</text>
+      <rect class="node" x="320" y="166" width="210" height="96"/>
+  <text class="label" x="338" y="199">Windows runner</text>
+  <text class="small" x="338" y="224">PyInstaller + ffmpeg</text>
+<text class="small" x="338" y="242">Node verified and bundled</text>
+      <rect class="node" x="584" y="166" width="210" height="96"/>
+  <text class="label" x="602" y="199">Installer</text>
+  <text class="small" x="602" y="224">Inno Setup Windows</text>
+<text class="small" x="602" y="242">installer</text>
+      <rect class="node2" x="848" y="166" width="210" height="96"/>
+  <text class="label" x="866" y="199">Staging</text>
+  <text class="small" x="866" y="224">SSH upload to restricted</text>
+<text class="small" x="866" y="242">deploy user</text>
+      <rect class="node2" x="1112" y="166" width="210" height="96"/>
+  <text class="label" x="1130" y="199">Promote</text>
+  <text class="small" x="1130" y="224">installer first, manifest</text>
+<text class="small" x="1130" y="242">last, public hash verify</text>
+      <path class="arrow" d="M266 214 H320"/>
+      <path class="arrow" d="M530 214 H584"/>
+      <path class="arrow" d="M794 214 H848"/>
+      <path class="arrow" d="M1058 214 H1112"/>
+
+      <text class="section" x="48" y="328">Installed App Update Check</text>
+      <rect class="node" x="56" y="358" width="250" height="112"/>
+  <text class="label" x="74" y="391">Startup check</text>
+  <text class="small" x="74" y="416">Qt app reads current</text>
+<text class="small" x="74" y="434">VERSION and update URL</text>
+      <rect class="node" x="372" y="358" width="250" height="112"/>
+  <text class="label" x="390" y="391">Compare version</text>
+  <text class="small" x="390" y="416">manifest version decides</text>
+<text class="small" x="390" y="434">whether update is offered</text>
+      <rect class="node" x="688" y="358" width="250" height="112"/>
+  <text class="label" x="706" y="391">Download installer</text>
+  <text class="small" x="706" y="416">new setup exe lands in</text>
+<text class="small" x="706" y="434">temp/app data</text>
+      <rect class="node2" x="1004" y="358" width="250" height="112"/>
+  <text class="label" x="1022" y="391">Verify + launch</text>
+  <text class="small" x="1022" y="416">SHA256 match before silent</text>
+<text class="small" x="1022" y="434">installer handoff</text>
+      <path class="arrow" d="M306 414 H372"/>
+      <path class="arrow" d="M622 414 H688"/>
+      <path class="arrow" d="M938 414 H1004"/>
+
+      <text class="section" x="48" y="548">Proof Points</text>
+      <rect class="panel" x="56" y="580" width="380" height="86"/>
+      <text class="label" x="80" y="615">tag release is gated</text>
+      <text class="small" x="80" y="642">workflow refuses VERSION mismatch</text>
+      <rect class="panel" x="510" y="580" width="380" height="86"/>
+      <text class="label" x="534" y="615">narrow VPS deploy user</text>
+      <text class="small" x="534" y="642">staging write + one sudo promote command</text>
+      <rect class="panel" x="964" y="580" width="300" height="86"/>
+      <text class="label" x="988" y="615">app verifies hash</text>
+      <text class="small" x="988" y="642">SHA256 checked before launch</text>
+  <line x1="36" y1="758" x2="1364" y2="758" stroke="#BFB090" stroke-width="2"/>
+  <rect class="footer" x="36" y="772" width="1328" height="28"/>
+  <text class="tiny" x="58" y="791" style="letter-spacing:2px">SECOND PASS // PORTFOLIO EVIDENCE</text>
+</svg>

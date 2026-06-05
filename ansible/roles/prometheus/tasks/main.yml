@@ -96,6 +96,10 @@
       - "--collector.textfile.directory=/textfile"
     user: "65534:65534"
     read_only: true
+    memory: "{{ (tresor_container_resource_limits | default({})).get('node-exporter', {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get('node-exporter', {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get('node-exporter', {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get('node-exporter', {}).pids_limit | default(omit) }}"
     state: started
 
 # =====================================================
@@ -122,6 +126,10 @@
       - "--docker_only=true"
     devices:
       - /dev/kmsg:/dev/kmsg
+    memory: "{{ (tresor_container_resource_limits | default({})).get('cadvisor', {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get('cadvisor', {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get('cadvisor', {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get('cadvisor', {}).pids_limit | default(omit) }}"
     state: started
 
 # =====================================================
@@ -184,6 +192,10 @@
       - "--web.listen-address=0.0.0.0:9090"
       - "--web.enable-lifecycle"
     user: "65534:65534"
+    memory: "{{ (tresor_container_resource_limits | default({})).get(prometheus_container_name, {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get(prometheus_container_name, {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get(prometheus_container_name, {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get(prometheus_container_name, {}).pids_limit | default(omit) }}"
     state: started
 
 # =====================================================

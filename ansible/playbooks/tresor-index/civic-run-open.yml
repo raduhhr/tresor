@@ -1,0 +1,42 @@
+---
+- name: Open latest Tresor Index civic run
+  hosts: tresor
+  become: true
+  gather_facts: false
+
+  vars:
+    civic_run_log_dir: /mnt/ssd/configs/tresor-index/logs
+    civic_run_pattern: full-civic-coverage-*.log
+    civic_run_tail_lines: 160
+
+  tasks:
+    - name: Find latest civic run log
+      ansible.builtin.shell: |
+        set -euo pipefail
+        latest="$(ls -1t "{{ civic_run_log_dir }}"/{{ civic_run_pattern }} 2>/dev/null | head -n 1 || true)"
+        if [ -z "$latest" ]; then
+          echo "no matching logs under {{ civic_run_log_dir }}"
+          exit 0
+        fi
+        pidfile="${latest%.log}.pid"
+        pid=""
+        state="unknown"
+        if [ -f "$pidfile" ]; then
+          pid="$(cat "$pidfile")"
+          if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            state="running"
+          else
+            state="not-running"
+          fi
+        fi
+        printf 'log=%s\npidfile=%s\npid=%s\nstate=%s\n\n' "$latest" "$pidfile" "$pid" "$state"
+        echo "--- tail ---"
+        tail -n {{ civic_run_tail_lines | int }} "$latest"
+      args:
+        executable: /bin/bash
+      register: civic_run_open
+      changed_when: false
+
+    - name: Show latest civic run
+      ansible.builtin.debug:
+        msg: "{{ civic_run_open.stdout }}"

@@ -9,7 +9,9 @@
     _uptime_kuma_sync_username: "{{ hostvars[inventory_hostname].uptime_kuma_sync_username | default('admin') }}"
     _uptime_kuma_public_status_slug: "{{ hostvars[inventory_hostname].uptime_kuma_public_status_slug | default('tresor') }}"
     _uptime_kuma_public_status_title: "{{ hostvars[inventory_hostname].uptime_kuma_public_status_title | default('Tresor Status') }}"
+    _uptime_kuma_private_group_name: "{{ hostvars[inventory_hostname].uptime_kuma_private_group_name | default('Private Services') }}"
     _uptime_kuma_public_group_name: "{{ hostvars[inventory_hostname].uptime_kuma_public_group_name | default('Public Services') }}"
+    _uptime_kuma_private_monitors: "{{ hostvars[inventory_hostname].uptime_kuma_private_monitors | default([]) }}"
     _uptime_kuma_public_monitors: "{{ hostvars[inventory_hostname].uptime_kuma_public_monitors | default([]) }}"
     uptime_kuma_sync_dir: "{{ _uptime_kuma_config_dir }}/sync"
     uptime_kuma_sync_venv_dir: "{{ uptime_kuma_sync_dir }}/venv"
@@ -104,7 +106,9 @@
         KUMA_PASSWORD: "{{ _uptime_kuma_sync_password }}"
         KUMA_STATUS_PAGE_SLUG: "{{ _uptime_kuma_public_status_slug }}"
         KUMA_STATUS_PAGE_TITLE: "{{ _uptime_kuma_public_status_title }}"
+        KUMA_PRIVATE_GROUP_NAME: "{{ _uptime_kuma_private_group_name }}"
         KUMA_PUBLIC_GROUP_NAME: "{{ _uptime_kuma_public_group_name }}"
+        KUMA_PRIVATE_MONITORS_JSON: "{{ _uptime_kuma_private_monitors | to_json }}"
         KUMA_MONITORS_JSON: "{{ _uptime_kuma_public_monitors | to_json }}"
       register: _kuma_sync
 

@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="portfolioRuntimeLightTitle portfolioRuntimeLightDesc">
+  <title id="portfolioRuntimeLightTitle">portfolio website // runtime snapshot</title>
+  <desc id="portfolioRuntimeLightDesc">Light mode runtime snapshot for the portfolio website showing the public path, static site origin, and the separate worker-backed contact path.</desc>
+  <defs>
+    <marker id="portfolioRuntimeLightArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2A5A7A"></path>
+    </marker>
+    <style>
+      .bg { fill: #E8DCC4; }
+      .title { fill: #0F0F0F; font: 700 28px "JetBrains Mono", "Courier New", monospace; }
+      .section { fill: #4A4A4A; font: 700 14px "JetBrains Mono", "Courier New", monospace; letter-spacing: 0.4px; }
+      .box { fill: #F2EBD9; stroke: #2A5A7A; stroke-width: 2; }
+      .label { fill: #0F0F0F; font: 700 18px "JetBrains Mono", "Courier New", monospace; text-anchor: middle; }
+      .small { fill: #4A4A4A; font: 400 13px "JetBrains Mono", "Courier New", monospace; text-anchor: middle; }
+      .cluster { fill: #F2EBD9; stroke: #BFB090; stroke-width: 2; }
+      .cluster-title { fill: #3D6E8E; font: 700 13px "JetBrains Mono", "Courier New", monospace; letter-spacing: 0.3px; }
+      .cluster-sub { fill: #4A4A4A; font: 400 11px "JetBrains Mono", "Courier New", monospace; }
+      .note { fill: #4A4A4A; font: 400 11px "JetBrains Mono", "Courier New", monospace; }
+      .line { fill: none; stroke: #2A5A7A; stroke-width: 3; marker-end: url(#portfolioRuntimeLightArrow); }
+      .split { fill: none; stroke: #BFB090; stroke-width: 2; stroke-dasharray: 10 10; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="620"></rect>
+  <text class="title" x="30" y="56">portfolio website // runtime snapshot</text>
+  <line class="split" x1="30" y1="306" x2="1170" y2="306"></line>
+
+  <text class="section" x="30" y="102">Public Path</text>
+
+  <rect class="box" x="80" y="168" width="150" height="68" rx="12"></rect>
+  <text class="label" x="155" y="204">browser</text>
+  <text class="small" x="155" y="225">user session</text>
+
+  <rect class="box" x="380" y="132" width="220" height="68" rx="12"></rect>
+  <text class="label" x="490" y="168">public site</text>
+  <text class="small" x="490" y="189">main domain</text>
+
+  <rect class="box" x="380" y="214" width="220" height="68" rx="12"></rect>
+  <text class="label" x="490" y="250">contact worker</text>
+  <text class="small" x="490" y="271">edge endpoint</text>
+
+  <path class="line" d="M230 202 H300 V166 H380"></path>
+  <path class="line" d="M230 202 H300 V248 H380"></path>
+
+  <text class="section" x="30" y="350">Inside The Platform</text>
+
+  <rect class="cluster" x="80" y="372" width="300" height="170" rx="18"></rect>
+  <text class="cluster-title" x="106" y="398">edge</text>
+  <text class="cluster-sub" x="106" y="414">the public entry point</text>
+  <rect class="box" x="114" y="436" width="232" height="72" rx="14"></rect>
+  <text class="label" x="230" y="474">cloudflare</text>
+  <text class="small" x="230" y="495">orange proxy + dns</text>
+  <text class="note" x="114" y="528">public domain</text>
+
+  <rect class="cluster" x="450" y="372" width="300" height="170" rx="18"></rect>
+  <text class="cluster-title" x="476" y="398">site origin</text>
+  <text class="cluster-sub" x="476" y="414">where the app lives</text>
+  <rect class="box" x="478" y="436" width="118" height="72" rx="14"></rect>
+  <text class="label" x="538" y="474">nginx</text>
+  <text class="small" x="538" y="495">static vhost</text>
+  <rect class="box" x="604" y="436" width="118" height="72" rx="14"></rect>
+  <text class="label" x="664" y="474">astro</text>
+  <text class="small" x="664" y="495">built files</text>
+  <text class="note" x="482" y="528">static site root</text>
+
+  <rect class="cluster" x="820" y="372" width="300" height="170" rx="18"></rect>
+  <text class="cluster-title" x="846" y="398">contact path</text>
+  <text class="cluster-sub" x="846" y="414">small separate backend</text>
+  <rect class="box" x="844" y="432" width="112" height="48" rx="12"></rect>
+  <text class="label" x="900" y="461">worker</text>
+  <text class="small" x="900" y="476">origin checks</text>
+  <rect class="box" x="984" y="432" width="112" height="48" rx="12"></rect>
+  <text class="label" x="1040" y="461">turnstile</text>
+  <text class="small" x="1040" y="476">gate</text>
+  <rect class="box" x="844" y="488" width="112" height="48" rx="12"></rect>
+  <text class="label" x="900" y="517">kv</text>
+  <text class="small" x="900" y="532">limit</text>
+  <rect class="box" x="984" y="488" width="112" height="48" rx="12"></rect>
+  <text class="label" x="1040" y="517">ses</text>
+  <text class="small" x="1040" y="532">sandbox mail</text>
+
+  <line x1="30" y1="558" x2="1170" y2="558" stroke="#BFB090" stroke-width="2"></line>
+  <rect x="30" y="568" width="1140" height="34" fill="#F2EBD9" stroke="#BFB090" stroke-width="2"></rect>
+  <text x="55" y="591" font-family="JetBrains Mono, Courier New, monospace" font-size="14" font-weight="700" letter-spacing="2.2" fill="#4A4A4A">DIAGRAM // RUNTIME SNAPSHOT</text>
+</svg>

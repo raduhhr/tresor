@@ -42,4 +42,8 @@
       traefik.http.middlewares.kuma-root-redirect.redirectregex.permanent: "true"
     env:
       TZ: "Europe/Bucharest"
+    memory: "{{ (tresor_container_resource_limits | default({})).get('uptime-kuma', {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get('uptime-kuma', {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get('uptime-kuma', {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get('uptime-kuma', {}).pids_limit | default(omit) }}"
     state: started

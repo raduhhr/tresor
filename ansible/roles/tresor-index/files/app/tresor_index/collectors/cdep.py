@@ -19,7 +19,7 @@ from ..models import ItemType, NormalizedItem, QuarantineCandidate, SourceConfig
 
 
 _BUCHAREST_TZ = ZoneInfo("Europe/Bucharest")
-_BILL_RE = re.compile(r"\b(?P<code>PL-x|Pl-x|PH\s+CD)\s*(?P<number>\d+)\s*/\s*(?P<year>\d{4})", re.IGNORECASE)
+_BILL_RE = re.compile(r"\b(?P<code>PL-x|Pl-x|PL|PH\s*CD|HCD)\s*(?P<number>\d+)\s*/\s*(?P<year>\d{4})", re.IGNORECASE)
 
 
 def _int_config(source: SourceConfig, key: str, default: int) -> int:
@@ -36,6 +36,13 @@ def _float_config(source: SourceConfig, key: str, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _vote_scope(source: SourceConfig) -> str:
+    value = str(source.config.get("vote_scope") or "").strip().lower()
+    if value in {"all", "substantive", "final"}:
+        return value
+    return "final" if bool(source.config.get("final_only", True)) else "all"
 
 
 def _text(row: ElementTree.Element, tag: str) -> str | None:
@@ -111,7 +118,7 @@ def _bill_from_title(title: str) -> dict[str, Any]:
     code = re.sub(r"\s+", " ", match.group("code")).upper()
     if code == "PL-X":
         code = "PL-x"
-    if code == "PH CD":
+    if code in {"PH CD", "PHCD"}:
         code = "PH CD"
     number = int(match.group("number"))
     year = int(match.group("year"))
@@ -132,11 +139,37 @@ def _vote_kind(title: str) -> str:
         return "final_rejection"
     if "vot final" in normalized:
         return "final"
-    if "timpi dezbateri" in normalized:
+    if "raport de respingere" in normalized:
+        return "rejection_report"
+    if "amendament" in normalized and ("respins" in normalized or "admis" in normalized or "adopt" in normalized):
+        return "amendment"
+    if "timpi dezbateri" in normalized or "timp dezbatere" in normalized:
         return "debate_time"
     if "verificare prezenta" in normalized:
         return "presence_check"
+    if "retrim" in normalized and "comis" in normalized:
+        return "committee_return"
+    if "ordine de zi" in normalized or "programul de lucru" in normalized:
+        return "agenda"
+    if normalized.startswith("vot test"):
+        return "test"
     return "other"
+
+
+def _include_vote(title: str, bill: dict[str, Any], scope: str) -> bool:
+    if scope == "all":
+        return True
+    kind = _vote_kind(title)
+    if scope == "final":
+        return kind.startswith("final")
+    if kind in {"presence_check", "debate_time", "agenda", "test"}:
+        return False
+    normalized = _normalize_text(title)
+    if kind.startswith("final") or kind in {"rejection_report", "amendment", "committee_return"}:
+        return True
+    if bill:
+        return True
+    return "adopt" in normalized or "resping" in normalized or "respins" in normalized
 
 
 def _outcome(title: str, yes: int | None, no: int | None) -> str | None:
@@ -150,6 +183,11 @@ def _outcome(title: str, yes: int | None, no: int | None) -> str | None:
         return "rejected" if passed else "not_rejected"
     if kind == "final":
         return "passed" if passed else "failed"
+    normalized = _normalize_text(title)
+    if "respins" in normalized or "resping" in normalized:
+        return "rejected" if passed else "not_rejected"
+    if "adopt" in normalized or "admis" in normalized:
+        return "adopted" if passed else "not_adopted"
     return None
 
 
@@ -495,9 +533,9 @@ def fetch_cdep_final_votes(source: SourceConfig) -> tuple[list[NormalizedItem], 
         "Accept": "application/xml,text/xml,text/html;q=0.8,*/*;q=0.5",
     }
     request_delay_seconds = max(0.0, _float_config(source, "request_delay_seconds", 0.3))
-    final_only = bool(source.config.get("final_only", True))
+    vote_scope = _vote_scope(source)
     max_votes = _int_config(source, "max_votes", 200)
-    xml_encoding = str(source.config.get("xml_encoding", "utf-8"))
+    xml_encoding = str(source.config.get("xml_encoding", "iso-8859-2"))
 
     session = requests.Session()
     session.verify = bool(source.config.get("verify_tls", True))
@@ -525,9 +563,9 @@ def fetch_cdep_final_votes(source: SourceConfig) -> tuple[list[NormalizedItem], 
     project_keys: set[tuple[int, int]] = set()
     for day, row in rows:
         title = _text(row, "DESCRIERE") or ""
-        if final_only and "vot final" not in _normalize_text(title):
-            continue
         bill = _bill_from_title(title)
+        if not _include_vote(title, bill, vote_scope):
+            continue
         if bill.get("code") == "PL-x" and bill.get("year"):
             project_keys.add((int(bill["number"]), int(bill["year"])))
         candidate_votes.append(
@@ -582,6 +620,7 @@ def fetch_cdep_final_votes(source: SourceConfig) -> tuple[list[NormalizedItem], 
                 "chamber": "Camera Deputatilor",
                 "kind": _vote_kind(vote["title"]),
                 "outcome": _outcome(vote["title"], counts.get("yes"), counts.get("no")),
+                "scope": vote_scope,
             },
             "bill": bill,
             "counts": counts,

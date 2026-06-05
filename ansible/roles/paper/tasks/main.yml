@@ -181,6 +181,10 @@
       TZ: "{{ paper_timezone | default(paper_tz | default('Europe/Bucharest')) }}"
       SERVER_IP: "{{ wg_bind_ip }}"
       SERVER_PORT: "25565"
+    memory: "{{ (tresor_container_resource_limits | default({})).get(paper_container | default('paper'), {}).memory | default(omit) }}"
+    cpus: "{{ (tresor_container_resource_limits | default({})).get(paper_container | default('paper'), {}).cpus | default(omit) }}"
+    cpu_shares: "{{ (tresor_container_resource_limits | default({})).get(paper_container | default('paper'), {}).cpu_shares | default(omit) }}"
+    pids_limit: "{{ (tresor_container_resource_limits | default({})).get(paper_container | default('paper'), {}).pids_limit | default(omit) }}"
 
 ############################
 # 5) Firewall

@@ -79,16 +79,20 @@ APIs stay private by design.
 
 ## Proof Gallery
 
-The images below are the same safe evidence set used by the portfolio site.
+The images below are a compact sample of the same safe evidence set used by
+the portfolio site. The fuller screenshot index is in
+[Portfolio Evidence](docs/portfolio-evidence.md).
 
 ### Control Plane
 
 ![Tresor control panel](docs/assets/tresor-control-panel.png)
 
-![Service inventory](docs/assets/tresor-cli-dashboard.png)
+![Public status page](docs/assets/status-page.png)
 
 <details>
 <summary>More operator views</summary>
+
+![Service inventory](docs/assets/tresor-cli-dashboard.png)
 
 ![Grafana action menu](docs/assets/tresor-control-panel-grafana-actions.png)
 
@@ -124,6 +128,8 @@ by [vot-parlament.ro](https://vot-parlament.ro/).
 <details>
 <summary>Tresor Index dashboards and civic product evidence</summary>
 
+![OLX listing digest](docs/assets/notifications_olx.png)
+
 ![Grafana news overview](docs/assets/grafana-news-overview.png)
 
 ![Grafana real estate listings](docs/assets/grafana-real-estate.png)
@@ -136,6 +142,12 @@ by [vot-parlament.ro](https://vot-parlament.ro/).
 
 ![vot-parlament.ro vote detail](docs/assets/vot-vote-detail.png)
 
+![vot-parlament.ro public homepage](docs/assets/vot_parlament_home.png)
+
+![vot-parlament.ro politician profile](docs/assets/vot_parlament_politician.png)
+
+![vot-parlament.ro vote notification](docs/assets/notifications_vot-parlament.png)
+
 ![Grafana parliament votes](docs/assets/grafana-parliament-votes.png)
 
 </details>
@@ -146,20 +158,22 @@ The radio lane shares an RTL-SDR between live ADS-B aircraft tracking and
 scheduled weather-satellite capture. The satellite image is a real Meteor M2-4
 pass captured from space.
 
-![Satellite watcher cockpit](docs/assets/space-navigator-cockpit.png)
+![Plane watcher cockpit](docs/assets/radio-planes-tui.png)
 
-![Meteor M2-4 weather satellite capture](docs/assets/satellite-decode-corrected.png)
+![Meteor M2-4 weather satellite capture](docs/assets/radio-meteor-m2-4-corrected-map.png)
 
 <details>
 <summary>Plane watcher and notification evidence</summary>
 
-![Plane watcher cockpit](docs/assets/plane-navigator-cockpit.png)
+![Satellite watcher cockpit](docs/assets/radio-satellite-tui.png)
+
+![Satellite watcher capture controls](docs/assets/radio-satellite-tui-bottom.png)
 
 ![Live planes map](docs/assets/planes-live-map.png)
 
-![Live aircraft and weather map](docs/assets/planes-live-public-crop.png)
+![Live aircraft and weather map](docs/assets/radio-planes-live-map.png)
 
-![Satellite watcher Discord notification](docs/assets/discord-satellite-watcher.png)
+![Satellite watcher Discord notification](docs/assets/radio-discord-pass-digest.png)
 
 </details>
 
@@ -194,6 +208,10 @@ secrets, status playbooks, and recovery paths through Tresor.
 
 ![Steam free game notification](docs/assets/discord-steam-free.png)
 
+![RA watcher notification](docs/assets/notifications_ra-watcher.png)
+
+![Tech news notification](docs/assets/notifications_tech-news.png)
+
 ![Minecraft join notification](docs/assets/discord-mc-joins.png)
 
 </details>
@@ -202,6 +220,7 @@ secrets, status playbooks, and recovery paths through Tresor.
 
 - [Architecture](docs/architecture.md)
 - [Operations](docs/operations.md)
+- [Portfolio Evidence](docs/portfolio-evidence.md)
 - [Sanitization](docs/sanitization.md)
 
 ## Validation

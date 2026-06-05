@@ -136,6 +136,10 @@
       ansible.builtin.set_fact:
         jellyfin_devices: "{{ ['/dev/dri:/dev/dri'] if enable_hw_accel else [] }}"
 
+    - name: Resolve Jellyfin resource limits
+      ansible.builtin.set_fact:
+        _jellyfin_resource_limits: "{{ (tresor_container_resource_limits | default({})).get('jellyfin', {}) }}"
+
     # --- Read existing Jellyfin state ---
     - name: Inspect existing 'jellyfin' container
       community.docker.docker_container_info:
@@ -261,20 +265,18 @@
         - ansible.builtin.set_fact:
             jellyfin_skip_due_to_port_conflict: true
 
-    # --- Idempotent ensure-present start/update (SKIP if already good or blocked) ---
-    - name: Skip start — Jellyfin is already healthy and owns the port
+    # --- Idempotent ensure-present start/update ---
+    - name: Jellyfin is already healthy and owns the port
       when:
         - _jf_running
         - _jf_healthy
         - _jf_image_matches
         - (_holder_name == '' or _holder_name == 'jellyfin')
       ansible.builtin.debug:
-        msg: "Jellyfin already healthy on {{ jellyfin_http_port }} — nothing to do."
+        msg: "Jellyfin already healthy on {{ jellyfin_http_port }}; reconciling container settings."
 
     - name: Ensure Jellyfin container is present and started
-      when: >
-        not ( _jf_running and _jf_healthy and _jf_image_matches and (_holder_name == '' or _holder_name == 'jellyfin') )
-        and not ( jellyfin_skip_due_to_port_conflict | default(false) )
+      when: not ( jellyfin_skip_due_to_port_conflict | default(false) )
       community.docker.docker_container:
         name: jellyfin
         image: "{{ jellyfin_image }}"
@@ -290,6 +292,11 @@
           - "{{ jellyfin_bind_addr }}:{{ jellyfin_http_port }}:8096"
         volumes: "{{ jellyfin_volumes }}"
         devices: "{{ jellyfin_devices }}"
+        memory: "{{ _jellyfin_resource_limits.memory | default(omit) }}"
+        memory_swap: "{{ _jellyfin_resource_limits.memory_swap | default(omit) }}"
+        cpus: "{{ _jellyfin_resource_limits.cpus | default(omit) }}"
+        cpu_shares: "{{ _jellyfin_resource_limits.cpu_shares | default(omit) }}"
+        pids_limit: "{{ _jellyfin_resource_limits.pids_limit | default(omit) }}"
 
     - name: Wait for Jellyfin port to accept connections
       when: not ( jellyfin_skip_due_to_port_conflict | default(false) )

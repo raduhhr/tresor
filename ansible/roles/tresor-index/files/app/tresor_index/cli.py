@@ -10,8 +10,11 @@ from typing import Any
 from . import __version__, db
 from .civic_cache import DEFAULT_TTL_SECONDS, refresh_civic_caches
 from .config import load_sources
+from .collectors.cdep import fetch_cdep_final_votes
+from .collectors.senat import fetch_senat_final_votes
 from .digest import DAILY_RULES, send_daily_digest, send_recorder_investigation_alerts
 from .ingest import fetch_source
+from .models import SourceConfig
 from .scheduler import run_forever, run_once
 
 
@@ -289,6 +292,174 @@ def cmd_civic_backfill(args: argparse.Namespace) -> int:
     return 0 if totals["errors"] == 0 else 1
 
 
+_CIVIC_SOURCES = ("cdep_final_votes", "senat_final_votes")
+
+
+def _selected_civic_source_ids(value: str) -> list[str]:
+    if value == "all":
+        return list(_CIVIC_SOURCES)
+    return [value]
+
+
+def _coverage_chamber(source_id: str) -> str:
+    if source_id == "senat_final_votes":
+        return "Senat"
+    return "Camera Deputatilor"
+
+
+def _fetch_official_vote_items(source: SourceConfig):
+    if source.parser == "cdep_final_votes":
+        return fetch_cdep_final_votes(source)
+    if source.parser == "senat_final_votes":
+        return fetch_senat_final_votes(source)
+    raise ValueError(f"unsupported civic coverage parser: {source.parser}")
+
+
+def _coverage_scan_year(
+    source: SourceConfig,
+    *,
+    year: int,
+    batch_days: int,
+    max_votes: int,
+    request_delay_seconds: float | None,
+    scope: str,
+    store: bool,
+) -> dict[str, Any]:
+    start = date(year, 1, 1)
+    end = date(year, 12, 31)
+    batches = _batches(_date_span(start, end), batch_days)
+    official_votes = 0
+    rejected_votes = 0
+    bytes_downloaded = 0
+    vote_ids: set[str] = set()
+    errors: list[str] = []
+    batch_rows: list[dict[str, Any]] = []
+    for index, batch in enumerate(batches, start=1):
+        batch_config = {
+            **source.config,
+            "dates": [day.isoformat() for day in batch],
+            "max_votes": max_votes,
+            "vote_scope": scope,
+            "final_only": scope == "final",
+        }
+        if request_delay_seconds is not None:
+            batch_config["request_delay_seconds"] = request_delay_seconds
+        scan_source = source.model_copy(update={"config": batch_config})
+        try:
+            items, rejected, http_status, batch_bytes = _fetch_official_vote_items(scan_source)
+            batch_vote_ids = {
+                str((item.metadata.get("vote") or {}).get("id") or item.external_id or item.canonical_url)
+                for item in items
+            }
+            official_votes += len(items)
+            rejected_votes += len(rejected)
+            bytes_downloaded += batch_bytes
+            vote_ids.update(batch_vote_ids)
+            row = {
+                "batch": index,
+                "batches": len(batches),
+                "from": batch[0].isoformat(),
+                "to": batch[-1].isoformat(),
+                "source_id": source.id,
+                "status": "success",
+                "http_status": http_status,
+                "official_votes": len(items),
+                "official_unique_votes": len(batch_vote_ids),
+                "rejected_votes": len(rejected),
+                "bytes_downloaded": batch_bytes,
+            }
+        except Exception as exc:
+            errors.append(str(exc))
+            row = {
+                "batch": index,
+                "batches": len(batches),
+                "from": batch[0].isoformat(),
+                "to": batch[-1].isoformat(),
+                "source_id": source.id,
+                "status": "error",
+                "error": str(exc),
+            }
+        batch_rows.append(row)
+        print(json.dumps(row, default=str, ensure_ascii=False), flush=True)
+
+    indexed_votes = db.parliament_indexed_vote_count(source_id=source.id, year=year)
+    status = "complete" if not errors else "error"
+    result = {
+        "source_id": source.id,
+        "chamber": _coverage_chamber(source.id),
+        "year": year,
+        "scope": scope,
+        "status": status,
+        "official_votes": official_votes,
+        "official_unique_votes": len(vote_ids),
+        "indexed_votes": indexed_votes,
+        "missing_votes": max(len(vote_ids) - indexed_votes, 0),
+        "extra_indexed_votes": max(indexed_votes - len(vote_ids), 0),
+        "rejected_votes": rejected_votes,
+        "bytes_downloaded": bytes_downloaded,
+        "errors": errors,
+    }
+    if store:
+        db.upsert_parliament_coverage_total(
+            source_id=source.id,
+            chamber=result["chamber"],
+            year=year,
+            scope=scope,
+            official_votes=official_votes,
+            official_unique_votes=len(vote_ids),
+            indexed_votes=indexed_votes,
+            rejected_votes=rejected_votes,
+            scan_status=status,
+            metadata={"batches": batch_rows, "errors": errors},
+        )
+    print(json.dumps({"year_result": result}, default=str, ensure_ascii=False), flush=True)
+    return result
+
+
+def cmd_civic_coverage_scan(args: argparse.Namespace) -> int:
+    db.migrate()
+    sources = {source.id: source for source in load_sources()}
+    years = range(args.from_year, args.to_year + 1)
+    results: list[dict[str, Any]] = []
+    for source_id in _selected_civic_source_ids(args.source):
+        source = sources.get(source_id)
+        if source is None:
+            print(f"unknown source: {source_id}", file=sys.stderr)
+            return 2
+        for year in years:
+            results.append(
+                _coverage_scan_year(
+                    source,
+                    year=year,
+                    batch_days=args.batch_days,
+                    max_votes=args.max_votes,
+                    request_delay_seconds=args.request_delay_seconds,
+                    scope=args.scope,
+                    store=args.store,
+                )
+            )
+    print(json.dumps({"status": "complete", "results": results}, indent=2, default=str, ensure_ascii=False))
+    return 0 if all(result["status"] == "complete" for result in results) else 1
+
+
+def cmd_civic_coverage_status(_: argparse.Namespace) -> int:
+    _as_json(db.parliament_coverage_totals())
+    return 0
+
+
+def cmd_civic_coverage_validate(args: argparse.Namespace) -> int:
+    report = db.parliament_validation_report()
+    print(json.dumps(report, indent=2, default=str, ensure_ascii=False))
+    if not args.strict:
+        return 0
+    severe = any(
+        int(report.get(key) or 0) > 0
+        for key in ("votes_without_positions", "votes_with_count_mismatch")
+    )
+    severe = severe or bool(report.get("positions_without_politician_rows")) or bool(report.get("coverage_gaps"))
+    return 1 if severe else 0
+
+
 def cmd_civic_cache_refresh(args: argparse.Namespace) -> int:
     db.migrate()
     results = refresh_civic_caches(ttl_seconds=args.ttl_seconds)
@@ -401,6 +572,24 @@ def build_parser() -> argparse.ArgumentParser:
     civic_backfill.add_argument("--dry-run", action="store_true", help="show planned batches without fetching")
     civic_backfill.add_argument("--stop-on-error", action="store_true", help="stop after the first failed batch")
     civic_backfill.set_defaults(func=cmd_civic_backfill)
+
+    civic_coverage = civic_sub.add_parser("coverage", help="civic coverage scan and validation")
+    civic_coverage_sub = civic_coverage.add_subparsers(dest="civic_coverage_command", required=True)
+    coverage_scan = civic_coverage_sub.add_parser("scan", help="scan official Parliament vote totals by year")
+    coverage_scan.add_argument("--source", default="all", choices=["all", "cdep_final_votes", "senat_final_votes"], help="source to scan")
+    coverage_scan.add_argument("--from-year", type=int, default=2016, help="first year to scan")
+    coverage_scan.add_argument("--to-year", type=int, default=date.today().year, help="last year to scan")
+    coverage_scan.add_argument("--scope", default="all", choices=["all", "substantive", "final"], help="official vote scope to count")
+    coverage_scan.add_argument("--batch-days", type=int, default=31, help="number of dates fetched per official scan batch")
+    coverage_scan.add_argument("--max-votes", type=int, default=5000, help="max official vote rows accepted per batch")
+    coverage_scan.add_argument("--request-delay-seconds", type=float, default=0.8, help="collector request delay override")
+    coverage_scan.add_argument("--store", action="store_true", help="store scan totals in parliament_coverage_totals")
+    coverage_scan.set_defaults(func=cmd_civic_coverage_scan)
+    coverage_status = civic_coverage_sub.add_parser("status", help="show stored coverage totals")
+    coverage_status.set_defaults(func=cmd_civic_coverage_status)
+    coverage_validate = civic_coverage_sub.add_parser("validate", help="validate normalized Parliament archive state")
+    coverage_validate.add_argument("--strict", action="store_true", help="exit non-zero when gaps or integrity issues exist")
+    coverage_validate.set_defaults(func=cmd_civic_coverage_validate)
 
     civic_cache = civic_sub.add_parser("cache", help="civic API cache maintenance")
     civic_cache_sub = civic_cache.add_subparsers(dest="civic_cache_command", required=True)

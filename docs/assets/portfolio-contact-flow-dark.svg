@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="portfolioDeployDarkTitle portfolioDeployDarkDesc">
+  <title id="portfolioDeployDarkTitle">portfolio website // deploy path</title>
+  <desc id="portfolioDeployDarkDesc">Dark mode deploy path for the portfolio website showing the app release lane and the nginx bootstrap lane into the live VPS.</desc>
+  <defs>
+    <marker id="portfolioDeployDarkArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa"></path>
+    </marker>
+    <style>
+      .bg { fill: #0a0e14; }
+      .title { fill: #e6edf3; font: 700 28px "JetBrains Mono", "Courier New", monospace; }
+      .section { fill: #8b949e; font: 700 14px "JetBrains Mono", "Courier New", monospace; letter-spacing: 0.4px; }
+      .box { fill: #161b22; stroke: #a78bfa; stroke-width: 2; }
+      .label { fill: #e6edf3; font: 700 18px "JetBrains Mono", "Courier New", monospace; text-anchor: middle; }
+      .small { fill: #8b949e; font: 400 13px "JetBrains Mono", "Courier New", monospace; text-anchor: middle; }
+      .cluster { fill: #161b22; stroke: #30363d; stroke-width: 2; }
+      .cluster-title { fill: #c4b5fd; font: 700 13px "JetBrains Mono", "Courier New", monospace; letter-spacing: 0.3px; }
+      .cluster-sub { fill: #8b949e; font: 400 11px "JetBrains Mono", "Courier New", monospace; }
+      .note { fill: #8b949e; font: 400 11px "JetBrains Mono", "Courier New", monospace; }
+      .line { fill: none; stroke: #a78bfa; stroke-width: 3; marker-end: url(#portfolioDeployDarkArrow); }
+      .split { fill: none; stroke: #30363d; stroke-width: 2; stroke-dasharray: 10 10; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="620"></rect>
+  <text class="title" x="30" y="56">portfolio website // deploy path</text>
+  <line class="split" x1="30" y1="306" x2="1170" y2="306"></line>
+
+  <text class="section" x="30" y="102">App Release</text>
+
+  <rect class="box" x="80" y="138" width="170" height="68" rx="12"></rect>
+  <text class="label" x="165" y="174">app repo</text>
+  <text class="small" x="165" y="195">astro source</text>
+
+  <rect class="box" x="340" y="138" width="200" height="68" rx="12"></rect>
+  <text class="label" x="440" y="174">github actions</text>
+  <text class="small" x="440" y="195">push + build + rsync</text>
+
+  <rect class="box" x="630" y="138" width="190" height="68" rx="12"></rect>
+  <text class="label" x="725" y="174">dist/</text>
+  <text class="small" x="725" y="195">astro output</text>
+
+  <rect class="box" x="910" y="138" width="200" height="68" rx="12"></rect>
+  <text class="label" x="1010" y="174">public host</text>
+  <text class="small" x="1010" y="195">static site root</text>
+
+  <path class="line" d="M250 172 H340"></path>
+  <path class="line" d="M540 172 H630"></path>
+  <path class="line" d="M820 172 H910"></path>
+
+  <text class="section" x="30" y="242">nginx bootstrap</text>
+
+  <rect class="box" x="80" y="268" width="170" height="68" rx="12"></rect>
+  <text class="label" x="165" y="304">infra repo</text>
+  <text class="small" x="165" y="325">ansible source</text>
+
+  <rect class="box" x="340" y="268" width="210" height="68" rx="12"></rect>
+  <text class="label" x="445" y="304">site bootstrap</text>
+  <text class="small" x="445" y="325">http first pass</text>
+
+  <rect class="box" x="640" y="268" width="170" height="68" rx="12"></rect>
+  <text class="label" x="725" y="304">dns cutover</text>
+  <text class="small" x="725" y="325">edge -&gt; host</text>
+
+  <rect class="box" x="900" y="268" width="190" height="68" rx="12"></rect>
+  <text class="label" x="995" y="304">tls live</text>
+  <text class="small" x="995" y="325">certbot + nginx</text>
+
+  <path class="line" d="M250 302 H340"></path>
+  <path class="line" d="M550 302 H640"></path>
+  <path class="line" d="M810 302 H900"></path>
+
+  <text class="section" x="30" y="350">Result</text>
+
+  <rect class="cluster" x="80" y="372" width="300" height="170" rx="18"></rect>
+  <text class="cluster-title" x="106" y="398">release lane</text>
+  <text class="cluster-sub" x="106" y="414">what ships the app</text>
+  <rect class="box" x="114" y="436" width="232" height="72" rx="14"></rect>
+  <text class="label" x="230" y="474">github actions</text>
+  <text class="small" x="230" y="495">deploy workflow</text>
+  <text class="note" x="114" y="528">builds Astro + rsyncs dist/</text>
+
+  <rect class="cluster" x="450" y="372" width="300" height="170" rx="18"></rect>
+  <text class="cluster-title" x="476" y="398">infra lane</text>
+  <text class="cluster-sub" x="476" y="414">what makes origin ready</text>
+  <rect class="box" x="478" y="436" width="232" height="72" rx="14"></rect>
+  <text class="label" x="594" y="474">ansible</text>
+  <text class="small" x="594" y="495">vhost + tls lifecycle</text>
+  <text class="note" x="482" y="528">same origin, separate lane</text>
+
+  <rect class="cluster" x="820" y="372" width="300" height="170" rx="18"></rect>
+  <text class="cluster-title" x="846" y="398">live origin</text>
+  <text class="cluster-sub" x="846" y="414">what ends up serving</text>
+  <rect class="box" x="844" y="436" width="112" height="72" rx="14"></rect>
+  <text class="label" x="900" y="474">nginx</text>
+  <text class="small" x="900" y="495">site host</text>
+  <rect class="box" x="984" y="436" width="112" height="72" rx="14"></rect>
+  <text class="label" x="1040" y="474">cloudflare</text>
+  <text class="small" x="1040" y="495">orange proxy</text>
+  <text class="note" x="844" y="528">public site goes live here</text>
+
+  <line x1="30" y1="558" x2="1170" y2="558" stroke="#30363d" stroke-width="2"></line>
+  <rect x="30" y="568" width="1140" height="34" fill="#0d1117" stroke="#30363d" stroke-width="2"></rect>
+  <text x="55" y="591" font-family="JetBrains Mono, Courier New, monospace" font-size="14" font-weight="700" letter-spacing="2.2" fill="#8b949e">DIAGRAM // DEPLOY PATH</text>
+</svg>
